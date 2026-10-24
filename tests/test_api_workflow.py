@@ -66,6 +66,7 @@ class FakeStateBuilder:
             "category": "OTHER",
             "partial_success": False,
             "warnings": [],
+            "warning_details": {},
         }
 
 
@@ -108,6 +109,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "category": "OTHER",
                 "partial_success": False,
                 "warnings": [],
+                "warning_details": {},
             },
         )
 
@@ -134,6 +136,13 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(
             result["warnings"],
             ["FACT_EXTRACTION_UNAVAILABLE", "CLASSIFICATION_UNAVAILABLE"],
+        )
+        self.assertEqual(
+            result["warning_details"],
+            {
+                "FACT_EXTRACTION_UNAVAILABLE": "OSError",
+                "CLASSIFICATION_UNAVAILABLE": "RuntimeError",
+            },
         )
 
     def test_zero_shot_classifier_maps_candidate_label(self) -> None:

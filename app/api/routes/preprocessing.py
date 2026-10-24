@@ -48,6 +48,7 @@ def preprocess_message(
                 extra={
                     "correlation_id": request.state.correlation_id,
                     "warnings": result["warnings"],
+                    "warning_details": result["warning_details"],
                 },
             )
         return result

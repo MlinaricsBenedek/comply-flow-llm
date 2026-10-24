@@ -10,6 +10,7 @@ class PreprocessingState(TypedDict):
     category: str | None
     partial_success: bool
     warnings: list[str]
+    warning_details: dict[str, str]
 
 
 class StateBuilder:
@@ -36,16 +37,19 @@ class StateBuilder:
                 "category": None,
                 "partial_success": False,
                 "warnings": [],
+                "warning_details": {},
             }
 
         facts: dict[str, list[str]] = {}
         category = None
         warnings = []
+        warning_details: dict[str, str] = {}
 
         try:
             facts = self.extractor(anonymized_message)
         except Exception as error:
             warnings.append("FACT_EXTRACTION_UNAVAILABLE")
+            warning_details["FACT_EXTRACTION_UNAVAILABLE"] = type(error).__name__
             logger.warning(
                 "preprocessing_component_unavailable",
                 extra={
@@ -58,6 +62,7 @@ class StateBuilder:
             category = self.classifier(anonymized_message)
         except Exception as error:
             warnings.append("CLASSIFICATION_UNAVAILABLE")
+            warning_details["CLASSIFICATION_UNAVAILABLE"] = type(error).__name__
             logger.warning(
                 "preprocessing_component_unavailable",
                 extra={
@@ -72,4 +77,5 @@ class StateBuilder:
             "category": category,
             "partial_success": bool(warnings),
             "warnings": warnings,
+            "warning_details": warning_details,
         }

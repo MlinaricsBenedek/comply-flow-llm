@@ -64,7 +64,7 @@ A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás 
 
 ### API-válaszok és hibák
 
-A sikeres `/preprocessing` válasz tartalmazza a `success: true`, `partial_success`, `warnings`, `message`, `facts` és `category` mezőket. A `partial_success: true` azt jelzi, hogy a tisztítás/anonimizálás sikerült, de egy modellkomponens nem adott eredményt. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
+A sikeres `/preprocessing` válasz tartalmazza a `success: true`, `partial_success`, `warnings`, `warning_details`, `message`, `facts` és `category` mezőket. A `partial_success: true` azt jelzi, hogy a tisztítás/anonimizálás sikerült, de egy modellkomponens nem adott eredményt. A `warning_details` kizárólag kivételtípusokat tartalmaz, nem kivételüzenetet vagy fájlútvonalat. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
 
 ```json
 {
@@ -155,18 +155,21 @@ A `/health` csak azt jelzi, hogy az alkalmazás válaszol; nem ellenőrzi a mode
 
 ## Indítás és konfiguráció
 
-A függőségek telepítése a repository gyökérkönyvtárából:
+A függőségeket és az alkalmazást ugyanazzal a projekt virtuális környezettel használd. Ha a `.venv` még nem létezik, egyszer hozd létre, majd telepítsd bele a csomagokat:
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 A promptfájlokat tartalmazó könyvtár beállítása és a fejlesztői szerver indítása PowerShellből:
 
 ```powershell
 $env:PROMPT_DIR = "C:\utvonal\a\promptokhoz"
-python -m uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+Ne indítsd az alkalmazást egy másik, globális `python` interpreterrel: annak külön csomagkörnyezete van, és hiányozhat belőle például a `transformers`, ami a NER és a zero-shot kategorizáló betöltéséhez szükséges.
 
 A könyvtárnak léteznie kell, és tartalmaznia kell legalább a használni kívánt promptot `.txt` fájlként. A fájl kiterjesztés nélküli neve a prompt azonosítója, például a `v1.1.txt` azonosítója `v1.1`. A promptkönyvtár az alkalmazás indulásakor kerül beolvasásra. A repository jelenleg nem tartalmaz promptfájlt, ezért a `PROMPT_DIR` értékét a futtatási környezetben meg kell adni, vagy a kódban szereplő alapértelmezett könyvtárat kell biztosítani. Hiányzó vagy nem olvasható könyvtár esetén a generálási szolgáltatás 503-mal jelzi az elérhetetlenséget; a `/health` ettől még válaszol.
 

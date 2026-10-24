@@ -25,3 +25,4 @@ class PreprocessingResponse(BaseModel):
     category: PreprocessingCategory | None
     partial_success: bool = False
     warnings: list[str] = Field(default_factory=list)
+    warning_details: dict[str, str] = Field(default_factory=dict)
