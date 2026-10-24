@@ -49,7 +49,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | FR-02 | A `POST /preprocessing` kérésnek egy `message` szöveget kell fogadnia. | Megvalósítva Pydantic-kérésmodellel. |
 | FR-03 | Az előfeldolgozó pipeline-nek normalizálnia kell a Unicode-szöveget, egységesítenie kell a sortöréseket, össze kell vonnia a soron belüli whitespace-t, és korlátoznia kell az egymást követő üres sorokat. | Megvalósítva. |
 | FR-04 | Az előfeldolgozó pipeline-nek ismert személyesadat-mintázatokat helyettesítő címkékkel kell anonimizálnia. | Megvalósítva regexekkel e-mail-címekre, magyar telefonszámokra, IBAN-ra, bankkártyaszámokra, egyes magyar adó-/TAJ-azonosítókra és címkével megadott nevekre. Nem teljes körű adatvédelmi garancia. |
-| FR-05 | Az előfeldolgozó pipeline-nek entitásokat kell kinyernie, majd kategóriát kell rendelnie az üzenethez. | A `StateBuilder` ezeket injektált komponenseken keresztül meghívja. A NER NER-Kor/HuBERT modellre épül; a classifier betanítást igényel. |
+| FR-05 | Az előfeldolgozó pipeline-nek entitásokat kell kinyernie, majd kategóriát kell rendelnie az üzenethez. | A default `StateBuilder` a NER-Kor/HuBERT entitáskinyerőt és egy többnyelvű NLI-modellre épülő zero-shot osztályozót használ. Modellhiba esetén részleges eredményt és figyelmeztetést ad. |
 | FR-06 | Üres vagy whitespace-re redukálódó üzenet esetén a pipeline üres üzenetet, üres ténylistát és `null` kategóriát adjon vissza. | A `StateBuilder` szintjén megvalósítva. |
 | FR-07 | A `POST /generate` kérés `input_data` objektumot vagy `message` mezőt fogadhat. | Megvalósítva. Ha mindkettő szerepel, a `message` alapján létrehozott bemenet az irányadó. |
 | FR-08 | `message` használatakor a rendszer a szöveget ügyfélüzenetként adja át, alapértelmezett `OTHER` kategóriával, üres tényekkel, `provide_information` döntéssel, valamint professzionális magyar választervvel. | Megvalósítva a kérésmodellben. |
@@ -66,8 +66,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | Metódus és útvonal | Bemenet | Sikeres válasz | Jelentősebb hibák |
 |---|---|---|---|
 | `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
-| `POST /preprocessing` | `{"message": string}` | `{"success": true, "message": string, "facts": object, "category": string|null}` | `400` feldolgozhatatlan bemenet; `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` nem várt hiba. |
-| `POST /preprocessing` | `{"message": string}` | `{"success": true, "message": string, "facts": object, "category": string|null}` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
+| `POST /preprocessing` | `{"message": string}` | `success`, `partial_success`, `warnings`, `message`, `facts`, `category` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
 | `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
 | `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters` | `success`, `response`, `prompt_version`, `model_name`, `model_id`, tényleges `model_parameters` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
 
@@ -130,14 +129,14 @@ A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementál
 | `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
 | `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct` |
 
-- A preprocessing útvonal alapértelmezésben nem kap `StateBuilder` példányt. Ezt az alkalmazás létrehozásakor injektálni kell; enélkül a végpont strukturált `503 PREPROCESSING_UNAVAILABLE` választ ad.
-- A kategorizáló `MessageClassifier` nem tartalmaz előre betanított modellt vagy betöltött súlyokat. A `train` metódus adatokkal történő meghívása szükséges, mielőtt a `classify` használható.
+- A NER és zero-shot modellek első használatkor töltenek be; hálózat/cache vagy modellhiba esetén a preprocessing válasza `partial_success: true` és `warnings` mezőkkel jelzi a kiesett lépést.
+- A zero-shot `MessageClassifier` alapértelmezett modellje `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`, a `ZERO_SHOT_CLASSIFIER_MODEL` változóval felülírható. A magyar panaszokon elért pontosság nincs validálva.
 
 ## 9. Ismert hiányosságok és nyitott kérdések
 
 1. Nincs a repositoryban promptfájl, ezért a szükséges `v1.1` promptot külsőleg kell biztosítani.
 2. Az alkalmazás alapértelmezett konfigurációja nem építi fel az előfeldolgozó pipeline-t.
-3. A classifier betanítási adatai, a betanított modell mentése/betöltése és a kategóriák minőségi célértékei nincsenek meghatározva.
+3. A zero-shot classifier magyar panaszokon mért pontossága, elfogadási küszöbe és kategórialeírásainak minősége nincs meghatározva.
 4. Az anonimizáló mintázatok pontossági és teljességi követelményei, valamint az anonimizálás utáni adatkezelés szabályai nincsenek rögzítve.
 5. Nincs meghatározva a válaszminőség mérési módja, elfogadási küszöbe vagy jogi megfelelőségi ellenőrzése.
 6. Nincsenek rögzítve telepítési, megfigyelhetőségi, naplózási, adatmegőrzési, SLA- és terhelési célok.

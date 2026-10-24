@@ -60,7 +60,13 @@ class FakeStateBuilder:
     def build(self, message: str) -> dict[str, object]:
         if self.failure is not None:
             raise self.failure
-        return {"message": f"clean:{message}", "facts": {"PERSON": []}, "category": "OTHER"}
+        return {
+            "message": f"clean:{message}",
+            "facts": {"PERSON": []},
+            "category": "OTHER",
+            "partial_success": False,
+            "warnings": [],
+        }
 
 
 class APIWorkflowTests(unittest.TestCase):
@@ -116,7 +122,7 @@ class APIWorkflowTests(unittest.TestCase):
             cleaner=lambda text: text or "",
             anonymizer=lambda text: text or "",
             extractor=fail_extraction,
-            classifier=untrained_classifier,
+            classifier=unavailable_classifier,
         )
 
         result = builder.build("Complaint")
@@ -250,6 +256,16 @@ class APIWorkflowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_unsupported_model_parameter_returns_400(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "model_parameters": {"num_beams": 2}},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "MODEL_PARAMETERS_INVALID")
 
     def test_generation_failure_returns_sanitized_503(self) -> None:
         self.model.failure = OSError("private model cache path")

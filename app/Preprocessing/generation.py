@@ -2,7 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelParameters(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     max_new_tokens: int | None = Field(default=None, gt=0)
     do_sample: bool | None = Field(default=None, strict=True)

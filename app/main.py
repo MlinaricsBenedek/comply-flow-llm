@@ -90,7 +90,12 @@ def _model_generation_parameters(
 
 def _create_default_state_builder() -> StateBuilder:
     extractor = FactExtractor()
-    classifier = MessageClassifier()
+    classifier = MessageClassifier(
+        model_name=os.getenv(
+            "ZERO_SHOT_CLASSIFIER_MODEL",
+            MessageClassifier.MODEL_NAME,
+        )
+    )
     return StateBuilder(
         cleaner=MessageCleaner.clean,
         anonymizer=MessageAnonymizer.anonymize,

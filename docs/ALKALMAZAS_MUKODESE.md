@@ -21,9 +21,9 @@ A `POST /preprocessing` végpont egy `message` szöveget vár. A beállított pi
 3. Entitásokat nyer ki az üzenetből, és ténylistát készít.
 4. Kategóriát rendel az üzenethez.
 
-A válaszban az átalakított `message`, a `facts` és a `category` szerepel. Üresre tisztított üzenet esetén a ténylista üres, a kategória pedig `null`.
+A válaszban az átalakított `message`, a `facts` és a `category` szerepel. Ha valamelyik modellkomponens nem elérhető, a válasz `partial_success: true` értékkel és gépi `warnings` kódokkal jelzi a részleges eredményt. Üresre tisztított üzenet esetén a ténylista üres, a kategória pedig `null`.
 
-Ez a végpont csak akkor használható, ha az alkalmazás létrehozásakor `StateBuilder` példányt kap. Az alapértelmezett `app = create_app()` hívás nem állítja be, ezért konfiguráció nélkül a végpont `503 PREPROCESSING_UNAVAILABLE` választ ad, és `preprocessing_not_configured` eseményt naplóz.
+Az alapértelmezett `app = create_app()` hívás létrehozza a `StateBuilder`-t, ezért a preprocessing route elérhető. Egyedi `create_app()` használatakor a `StateBuilder` injektálható; ha az explicit `None`, a végpont `503 PREPROCESSING_UNAVAILABLE` választ ad.
 
 Az előfeldolgozó komponensek szerepe:
 
@@ -33,10 +33,12 @@ Az előfeldolgozó komponensek szerepe:
 | `MessageAnonymizer` | Regexekkel ismert e-mail-, magyar telefonszám-, IBAN-, kártyaszám-, egyes adó-/TAJ-azonosító- és címkézett névmintákat helyettesít, például `[EMAIL]` értékkel. | Nem. Csak a preprocessing pipeline hívja. |
 | `FactExtractor` | A NER-modell találataiból címkézett tényeket állít össze; többek között a személy-, hely- és szervezetcímkéket egységesíti. | Nem. A preprocessing válasz része, a kliensnek kell továbbadnia. |
 | `NERModel` | A `NYTK/named-entity-recognition-nerkor-hubert-hungarian` Hugging Face modellt használja entitásfelismerésre. | Nem. A `FactExtractor` használja. |
-| `MessageClassifier` | Üzenetet sorol a támogatott ügykategóriák egyikébe. A `train` metódussal kapott adatokból épít TensorFlow modellt. | Nem automatikusan. Betanított példányt kell a `StateBuilder`-be injektálni. |
-| `StateBuilder` | A cleaner → anonymizer → extractor → classifier sorrendben futtatja a pipeline-t. A kinyerés és kategorizálás már az anonimizált szöveget kapja. | Nem. A `/preprocessing` végpont használja, ha az alkalmazás létrehozásakor be van injektálva. |
+| `MessageClassifier` | A `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` többnyelvű NLI-modellel zero-shot kategóriabesorolást végez hét magyar nyelvű kategórialeírás alapján. | Igen, az alapértelmezett `StateBuilder` részeként; a modell lustán, az első osztályozásnál töltődik be. |
+| `StateBuilder` | A cleaner → anonymizer → extractor → classifier sorrendben futtatja a pipeline-t. A kinyerés és kategorizálás már az anonimizált szöveget kapja; modellhiba esetén részleges eredményt és figyelmeztetést ad. | Igen. A `/preprocessing` végpont használja; alapértelmezés szerint az alkalmazás létrehozza. |
 
-Az osztályok implementációja tehát rendelkezésre áll, de ettől a pipeline még nincs automatikusan bekötve: az alapértelmezett `create_app()` nem készít `StateBuilder`-t, és a classifier betanítását sem végzi el.
+Az alapértelmezett `create_app()` létrehozza és beköti a `StateBuilder`-t. A NER és a zero-shot classifier modellek az első preprocessing kéréskor töltődnek be. Ha valamelyik modell nem elérhető, a végpont a többi sikeresen végrehajtott lépés eredményét `partial_success` jelöléssel adja vissza.
+
+A zero-shot modell többnyelvű NLI-adatokon tanult, de a magyar panaszokra adott kategóriaminősége nincs a projektben validálva. Éles használat előtt magyar, címkézett panaszokon kell mérni; a modell nem helyettesíti a saját adatokon végzett minőségellenőrzést.
 
 ### Válaszgenerálás
 
@@ -62,7 +64,7 @@ A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás 
 
 ### API-válaszok és hibák
 
-A sikeres `/preprocessing` válasz megőrzi a `message`, `facts` és `category` mezőket, és hozzáadja a `success: true` jelzőt. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
+A sikeres `/preprocessing` válasz tartalmazza a `success: true`, `partial_success`, `warnings`, `message`, `facts` és `category` mezőket. A `partial_success: true` azt jelzi, hogy a tisztítás/anonimizálás sikerült, de egy modellkomponens nem adott eredményt. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
 
 ```json
 {
@@ -172,7 +174,7 @@ A generálás alapértelmezett promptazonosítója a `DEFAULT_PROMPT_NAME` vált
 
 Az alapértelmezett modellazonosító `qwen2.5-0.5b-instruct`, amit a `DEFAULT_LLM_MODEL` változóval lehet felülírni. A kliens a kérés `model_name` mezőjével választhat a regisztrált modellek közül. A Hugging Face modellazonosítók a `QWEN2_5_MODEL_NAME`, `QWEN_MODEL_NAME`, `QWEN2_MODEL_NAME`, `LLAMA_MODEL_NAME` és `LLAMA3_2_MODEL_NAME` változókkal konfigurálhatók.
 
-A generálási beállítások alapértékei: `LLM_MAX_NEW_TOKENS` (`512`), `LLM_DO_SAMPLE` (`false`), `LLM_TEMPERATURE` (`1.0`) és `LLM_TOP_P` (`1.0`). Ezek modellenként felülírhatók a `QWEN2_5_*`, `QWEN2_*`, `LLAMA_TINY_*` és `LLAMA3_2_*` változókkal; a változónév végződése `MAX_NEW_TOKENS`, `DO_SAMPLE`, `TEMPERATURE` vagy `TOP_P`. A kérés opcionális `model_parameters` objektuma egy-egy generálásnál felülírhatja ezeket. A pozitív `max_new_tokens`, pozitív és véges `temperature`, valamint a `(0, 1]` tartományú `top_p` kötelező. A `temperature` és `top_p` csak akkor kerül ténylegesen a modellhívásba, ha a mintavételezés engedélyezett; a sikeres válasz csak a ténylegesen alkalmazott paramétereket tartalmazza.
+A generálási beállítások alapértékei: `LLM_MAX_NEW_TOKENS` (`512`), `LLM_DO_SAMPLE` (`false`), `LLM_TEMPERATURE` (`1.0`) és `LLM_TOP_P` (`1.0`). Ezek modellenként felülírhatók a `QWEN2_5_*`, `QWEN2_*`, `LLAMA_TINY_*` és `LLAMA3_2_*` változókkal; a változónév végződése `MAX_NEW_TOKENS`, `DO_SAMPLE`, `TEMPERATURE` vagy `TOP_P`. A zero-shot classifier modellazonosítója a `ZERO_SHOT_CLASSIFIER_MODEL` változóval cserélhető, alapértéke `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. A kérés opcionális `model_parameters` objektuma egy-egy generálásnál felülírhatja az LLM beállításait. A pozitív `max_new_tokens`, pozitív és véges `temperature`, valamint a `(0, 1]` tartományú `top_p` kötelező. A `temperature` és `top_p` csak akkor kerül ténylegesen a modellhívásba, ha a mintavételezés engedélyezett; a sikeres válasz csak a ténylegesen alkalmazott paramétereket tartalmazza.
 
 A Transformers modellbetöltése és inferenciája helyi, szinkron művelet. A kód nem szab rá mesterséges falióra-időkorlátot, és nem tudja megszakítani a CPU/GPU-n futó inference-t; `504` kizárólag akkor keletkezik, ha a függőség tényleges `TimeoutError`-t dob. A modellletöltéshez és futtatáshoz megfelelő hálózati hozzáférés és számítási erőforrás szükséges lehet.
 
@@ -181,8 +183,8 @@ A Transformers modellbetöltése és inferenciája helyi, szinkron művelet. A k
 ## Korlátok
 
 - Az anonimizálás meghatározott mintákra épül; nem ismer fel minden személyes adatot, és önmagában nem jelent adatvédelmi garanciát.
-- A preprocessing útvonal nincs automatikusan konfigurálva az alapértelmezett alkalmazásban.
-- A kategorizáló komponens használatához betanított modell szükséges; a repository nem biztosít előre betanított súlyokat vagy tanítási adatokat.
+- A NER és zero-shot modellek első használatakor Hugging Face letöltést vagy cache-hozzáférést igényelnek; ezek kiesése részleges eredményt okoz.
+- A zero-shot kategóriabesorolás magyar panaszokon elért pontossága nincs mérve vagy elfogadási küszöbhöz kötve.
 - Nincs hitelesítés, jogosultságkezelés, sebességkorlátozás vagy adatbázis.
 - A válasz minősége nem garantált; a modell determinisztikus beállítással legfeljebb 512 új tokent generál.
 - A `504` nem szerveroldali inference-megszakítás: a jelenlegi lokális modellfuttatásnak nincs külön beállított időkerete.
