@@ -96,7 +96,7 @@ A kérés `X-Correlation-ID` fejlécét a szerver csak biztonságos karakterekke
 | Eset | HTTP-státusz | Hibakód |
 |---|---:|---|
 | Hibás JSON vagy mezővalidáció | `422` | `VALIDATION_ERROR` |
-| Hiányzó bemenet vagy érvénytelen érték | `400` | `GENERATION_INPUT_INVALID` / `PREPROCESSING_INPUT_INVALID` |
+| Hiányzó generálási bemenet vagy érvénytelen promptadat | `400` | `GENERATION_INPUT_INVALID` |
 | Nem támogatott modell vagy modellparaméter | `400` | `MODEL_NOT_SUPPORTED` / `MODEL_PARAMETERS_INVALID` |
 | Nem található promptverzió | `404` | `PROMPT_VERSION_NOT_FOUND` |
 | Modell, prompt vagy preprocessing függőség nem érhető el | `503` | végponttól függő `*_UNAVAILABLE` |

@@ -67,6 +67,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 |---|---|---|---|
 | `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
 | `POST /preprocessing` | `{"message": string}` | `{"success": true, "message": string, "facts": object, "category": string|null}` | `400` feldolgozhatatlan bemenet; `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` nem várt hiba. |
+| `POST /preprocessing` | `{"message": string}` | `{"success": true, "message": string, "facts": object, "category": string|null}` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
 | `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
 | `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters` | `success`, `response`, `prompt_version`, `model_name`, `model_id`, tényleges `model_parameters` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
 

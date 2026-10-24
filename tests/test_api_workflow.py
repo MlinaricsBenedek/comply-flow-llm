@@ -227,6 +227,17 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
         self.assertNotIn("private detail", response.text)
 
+    def test_preprocessing_value_error_is_not_misreported_as_client_error(self) -> None:
+        self.app = create_app(
+            state_builder=FakeStateBuilder(ValueError("private dependency detail")),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request("POST", "/preprocessing", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
+        self.assertNotIn("private dependency detail", response.text)
     def test_invalid_request_returns_422(self) -> None:
         response = self.request("POST", "/generate", json={"message": 12})
 
