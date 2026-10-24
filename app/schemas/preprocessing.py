@@ -19,6 +19,7 @@ class PreprocessingRequest(BaseModel):
 
 
 class PreprocessingResponse(BaseModel):
+    success: bool = True
     message: str
     facts: dict[str, list[str]]
     category: PreprocessingCategory | None

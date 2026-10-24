@@ -1,0 +1,9 @@
+{
+  "message": "Szeretném megtudni, hogyan kezelik a személyes adataimat.",
+  "facts": {
+    "language": ["hu"]
+  },
+  "category": "GENERAL_COMPLAINT",
+  "prompt_name": "v1.1",
+  "model_name": "qwen2.5-0.5b-instruct"
+}
