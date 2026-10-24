@@ -16,6 +16,8 @@ os.environ["PROMPT_DIR"] = _PROMPT_DIRECTORY.name
 
 from app.Preprocessing.generation import GenerationRequest
 from app.main import create_app
+from app.Preprocessing.state_builder import StateBuilder
+from app.Preprocessing.classifier import MessageClassifier
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 
@@ -98,8 +100,75 @@ class APIWorkflowTests(unittest.TestCase):
                 "message": "clean:hello",
                 "facts": {"PERSON": []},
                 "category": "OTHER",
+                "partial_success": False,
+                "warnings": [],
             },
         )
+
+    def test_state_builder_returns_partial_result_for_unavailable_components(self) -> None:
+        def fail_extraction(text: str) -> dict[str, list[str]]:
+            raise OSError("model download details")
+
+        def unavailable_classifier(text: str) -> str:
+            raise RuntimeError("classifier download details")
+
+        builder = StateBuilder(
+            cleaner=lambda text: text or "",
+            anonymizer=lambda text: text or "",
+            extractor=fail_extraction,
+            classifier=untrained_classifier,
+        )
+
+        result = builder.build("Complaint")
+
+        self.assertEqual(result["message"], "Complaint")
+        self.assertEqual(result["facts"], {})
+        self.assertIsNone(result["category"])
+        self.assertTrue(result["partial_success"])
+        self.assertEqual(
+            result["warnings"],
+            ["FACT_EXTRACTION_UNAVAILABLE", "CLASSIFICATION_UNAVAILABLE"],
+        )
+
+    def test_zero_shot_classifier_maps_candidate_label(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_pipeline_factory(**kwargs: object):
+            def classify(text: str, **pipeline_kwargs: object) -> dict[str, object]:
+                calls.append({"text": text, **pipeline_kwargs})
+                return {
+                    "labels": ["szállítással vagy kézbesítéssel kapcsolatos"],
+                    "scores": [0.87],
+                }
+
+            return classify
+
+        classifier = MessageClassifier(pipeline_factory=fake_pipeline_factory)
+
+        category = classifier.classify("Hol van a csomagom?")
+
+        self.assertEqual(category, "DELIVERY")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["text"], "Hol van a csomagom?")
+        self.assertEqual(calls[0]["multi_label"], False)
+
+    def test_zero_shot_classifier_loads_pipeline_lazily_once(self) -> None:
+        factory_calls: list[dict[str, object]] = []
+
+        def fake_pipeline_factory(**kwargs: object):
+            factory_calls.append(kwargs)
+            return lambda text, **pipeline_kwargs: {
+                "labels": ["garanciával kapcsolatos"],
+                "scores": [0.8],
+            }
+
+        classifier = MessageClassifier(pipeline_factory=fake_pipeline_factory)
+
+        self.assertEqual(factory_calls, [])
+        self.assertEqual(classifier.classify("Elromlott a termék."), "WARRANTY")
+        self.assertEqual(classifier.classify("Még garanciális?"), "WARRANTY")
+        self.assertEqual(len(factory_calls), 1)
+        self.assertEqual(factory_calls[0]["task"], "zero-shot-classification")
 
     def test_generation_success_returns_effective_model_metadata(self) -> None:
         response = self.request(
@@ -222,17 +291,10 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "PREPROCESSING_UNAVAILABLE")
 
-    def test_missing_preprocessing_pipeline_returns_503(self) -> None:
+    def test_default_app_configures_preprocessing_pipeline(self) -> None:
         self.app = create_app(generation_service=self.generation_service)
 
-        response = self.request("POST", "/preprocessing", json={"message": "hello"})
-
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "PREPROCESSING_UNAVAILABLE")
-        self.assertEqual(
-            response.json()["error"]["message"],
-            "The preprocessing pipeline is not configured.",
-        )
+        self.assertIsNotNone(self.app.state.state_builder)
 
     def test_preprocessing_unexpected_failure_returns_sanitized_500(self) -> None:
         self.app = create_app(

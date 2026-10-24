@@ -1,6 +1,8 @@
 from collections.abc import Callable
+import logging
 from typing import TypedDict
 
+logger = logging.getLogger(__name__)
 
 class PreprocessingState(TypedDict):
     message: str
@@ -42,13 +44,27 @@ class StateBuilder:
 
         try:
             facts = self.extractor(anonymized_message)
-        except Exception:
+        except Exception as error:
             warnings.append("FACT_EXTRACTION_UNAVAILABLE")
+            logger.warning(
+                "preprocessing_component_unavailable",
+                extra={
+                    "component": "fact_extractor",
+                    "exception_type": type(error).__name__,
+                },
+            )
 
         try:
             category = self.classifier(anonymized_message)
-        except Exception:
+        except Exception as error:
             warnings.append("CLASSIFICATION_UNAVAILABLE")
+            logger.warning(
+                "preprocessing_component_unavailable",
+                extra={
+                    "component": "classifier",
+                    "exception_type": type(error).__name__,
+                },
+            )
 
         return {
             "message": anonymized_message,
