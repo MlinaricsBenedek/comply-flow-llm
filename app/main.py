@@ -15,6 +15,10 @@ from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
 from app.api.routes.preprocessing import router as preprocessing_router
 from app.models.llm_model import LlamaModel, QwenModel
+from app.Preprocessing.anonymizer import MessageAnonymizer
+from app.Preprocessing.classifier import MessageClassifier
+from app.Preprocessing.cleaner import MessageCleaner
+from app.Preprocessing.extractor import FactExtractor
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
@@ -84,10 +88,24 @@ def _model_generation_parameters(
     }
 
 
+def _create_default_state_builder() -> StateBuilder:
+    extractor = FactExtractor()
+    classifier = MessageClassifier()
+    return StateBuilder(
+        cleaner=MessageCleaner.clean,
+        anonymizer=MessageAnonymizer.anonymize,
+        extractor=extractor.extract,
+        classifier=classifier.classify,
+    )
+
+
 def create_app(
     state_builder: StateBuilder | None = None,
     generation_service: GenerationService | None = None,
 ) -> FastAPI:
+    if state_builder is None:
+        state_builder = _create_default_state_builder()
+
     if generation_service is None:
         generation_parameters = {
             "max_new_tokens": int(os.getenv("LLM_MAX_NEW_TOKENS", "512")),

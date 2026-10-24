@@ -130,7 +130,7 @@ A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementál
 | `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
 | `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct` |
 
-- A preprocessing útvonal alapértelmezésben nem kap `StateBuilder` példányt. Ezt az alkalmazás létrehozásakor injektálni kell; enélkül a végpont strukturált `503` választ ad.
+- A preprocessing útvonal alapértelmezésben nem kap `StateBuilder` példányt. Ezt az alkalmazás létrehozásakor injektálni kell; enélkül a végpont strukturált `503 PREPROCESSING_UNAVAILABLE` választ ad.
 - A kategorizáló `MessageClassifier` nem tartalmaz előre betanított modellt vagy betöltött súlyokat. A `train` metódus adatokkal történő meghívása szükséges, mielőtt a `classify` használható.
 
 ## 9. Ismert hiányosságok és nyitott kérdések

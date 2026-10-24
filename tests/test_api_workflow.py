@@ -22,9 +22,13 @@ from app.services.llm_service import LLMService
 
 class FakePromptService:
     def get_prompt(self, name: str) -> str:
-        if name != "v1.1":
+        prompts = {
+            "v1.1": "Reply to {{customerMessage}}",
+            "v2.0": "New prompt for {{customerMessage}}",
+        }
+        if name not in prompts:
             raise KeyError(f"Prompt not found: {name}")
-        return "Reply to {{customerMessage}}"
+        return prompts[name]
 
 
 class FakeModel:
@@ -122,6 +126,17 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(self.model.prompt, "Reply to hello")
         self.assertEqual(self.model.parameters, {"max_new_tokens": 24, "do_sample": False})
 
+    def test_generation_uses_requested_prompt_version(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "prompt_name": "v2.0"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["prompt_version"], "v2.0")
+        self.assertEqual(self.model.prompt, "New prompt for hello")
+
     def test_local_model_path_is_not_returned(self) -> None:
         self.model.model_name = r"C:\private\models\customer-model"
 
@@ -214,6 +229,10 @@ class APIWorkflowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "PREPROCESSING_UNAVAILABLE")
+        self.assertEqual(
+            response.json()["error"]["message"],
+            "The preprocessing pipeline is not configured.",
+        )
 
     def test_preprocessing_unexpected_failure_returns_sanitized_500(self) -> None:
         self.app = create_app(

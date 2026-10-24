@@ -23,7 +23,7 @@ A `POST /preprocessing` végpont egy `message` szöveget vár. A beállított pi
 
 A válaszban az átalakított `message`, a `facts` és a `category` szerepel. Üresre tisztított üzenet esetén a ténylista üres, a kategória pedig `null`.
 
-Ez a végpont csak akkor használható, ha az alkalmazás létrehozásakor `StateBuilder` példányt kap. Az alapértelmezett alkalmazás ezt nem állítja be, ezért konfiguráció nélkül a végpont `503` választ ad.
+Ez a végpont csak akkor használható, ha az alkalmazás létrehozásakor `StateBuilder` példányt kap. Az alapértelmezett `app = create_app()` hívás nem állítja be, ezért konfiguráció nélkül a végpont `503 PREPROCESSING_UNAVAILABLE` választ ad, és `preprocessing_not_configured` eseményt naplóz.
 
 Az előfeldolgozó komponensek szerepe:
 

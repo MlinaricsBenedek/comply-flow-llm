@@ -30,10 +30,27 @@ def preprocess_message(
 ) -> PreprocessingResponse:
     builder = request.app.state.state_builder
     if builder is None:
-        raise APIError(503, "PREPROCESSING_UNAVAILABLE", "The preprocessing pipeline is unavailable.")
+        logger.error(
+            "preprocessing_not_configured",
+            extra={"correlation_id": request.state.correlation_id},
+        )
+        raise APIError(
+            503,
+            "PREPROCESSING_UNAVAILABLE",
+            "The preprocessing pipeline is not configured.",
+        )
 
     try:
-        return builder.build(payload.message)
+        result = builder.build(payload.message)
+        if result["partial_success"]:
+            logger.warning(
+                "preprocessing_partial_success",
+                extra={
+                    "correlation_id": request.state.correlation_id,
+                    "warnings": result["warnings"],
+                },
+            )
+        return result
     except TimeoutError as error:
         logger.error(
             "preprocessing_timed_out",

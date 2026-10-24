@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 PreprocessingCategory = Literal[
@@ -23,3 +23,5 @@ class PreprocessingResponse(BaseModel):
     message: str
     facts: dict[str, list[str]]
     category: PreprocessingCategory | None
+    partial_success: bool = False
+    warnings: list[str] = Field(default_factory=list)

@@ -6,6 +6,8 @@ class PreprocessingState(TypedDict):
     message: str
     facts: dict[str, list[str]]
     category: str | None
+    partial_success: bool
+    warnings: list[str]
 
 
 class StateBuilder:
@@ -30,10 +32,28 @@ class StateBuilder:
                 "message": "",
                 "facts": {},
                 "category": None,
+                "partial_success": False,
+                "warnings": [],
             }
+
+        facts: dict[str, list[str]] = {}
+        category = None
+        warnings = []
+
+        try:
+            facts = self.extractor(anonymized_message)
+        except Exception:
+            warnings.append("FACT_EXTRACTION_UNAVAILABLE")
+
+        try:
+            category = self.classifier(anonymized_message)
+        except Exception:
+            warnings.append("CLASSIFICATION_UNAVAILABLE")
 
         return {
             "message": anonymized_message,
-            "facts": self.extractor(anonymized_message),
-            "category": self.classifier(anonymized_message),
+            "facts": facts,
+            "category": category,
+            "partial_success": bool(warnings),
+            "warnings": warnings,
         }
