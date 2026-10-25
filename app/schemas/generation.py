@@ -64,7 +64,7 @@ class GenerationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     success: Literal[True] = True
-    response: str
+    response: str = Field(min_length=1)
     prompt_version: str
     model_name: str
     model_id: str | None

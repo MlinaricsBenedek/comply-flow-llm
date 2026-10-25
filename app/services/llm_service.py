@@ -22,8 +22,7 @@ class ModelExecutionError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ModelExecutionResult:
-    response: str
+class ModelConfiguration:
     model_name: str
     model_id: str | None
     model_parameters: dict[str, int | float | bool]
@@ -49,40 +48,30 @@ class LLMService:
         model_name: str | None = None,
         model_parameters: Mapping[str, int | float | bool] | None = None,
     ) -> str:
-        return self.execute(prompt, model_name, model_parameters).response
+        configuration = self.model_configuration(model_name, model_parameters)
+        return self.execute(prompt, configuration)
 
     def execute(
         self,
         prompt: str,
-        model_name: str | None = None,
-        model_parameters: Mapping[str, int | float | bool] | None = None,
-    ) -> ModelExecutionResult:
+        configuration: ModelConfiguration,
+    ) -> str:
         if not prompt.strip():
             raise ValueError("Prompt must not be empty.")
 
-        selected_model_name, model_id, parameters = self.model_configuration(
-            model_name,
-            model_parameters,
-        )
-        model = self._models[selected_model_name]
+        model = self._models[configuration.model_name]
         try:
-            response = model.generate(prompt, **parameters)
+            return model.generate(prompt, **configuration.model_parameters)
         except TimeoutError:
             raise
         except Exception as error:
             raise ModelExecutionError("The language model could not complete the request.") from error
-        return ModelExecutionResult(
-            response=response,
-            model_name=selected_model_name,
-            model_id=model_id,
-            model_parameters=parameters,
-        )
 
     def model_configuration(
         self,
         model_name: str | None = None,
         overrides: Mapping[str, int | float | bool] | None = None,
-    ) -> tuple[str, str, dict[str, int | float | bool]]:
+    ) -> ModelConfiguration:
         selected_model_name = model_name or self.default_model
         try:
             model = self._models[selected_model_name]
@@ -148,7 +137,11 @@ class LLMService:
             and ".." not in configured_model_id.split("/")
             else None
         )
-        return selected_model_name, model_id, effective_parameters
+        return ModelConfiguration(
+            model_name=selected_model_name,
+            model_id=model_id,
+            model_parameters=effective_parameters,
+        )
 
     def available_models(self) -> tuple[str, ...]:
         return tuple(self._models)
