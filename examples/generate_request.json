@@ -1,19 +1,5 @@
 {
-  "input_data": {
-    "customerMessage": "Szeretném megtudni, hogyan kezelik a személyes adataimat.",
-    "cleanedText": "Szeretném megtudni, hogyan kezelik a személyes adataimat.",
-    "caseType": "GENERAL_COMPLAINT",
-    "structuredCaseState": {
-      "language": ["hu"]
-    },
-    "ruleDecision": "provide_information",
-    "ruleReason": "No rule-engine decision was provided.",
-    "matchedRules": [],
-    "responsePlan": {
-      "tone": "professional",
-      "language": "Hungarian"
-    }
-  },
+  "message": "Szeretném megtudni, hogyan kezelik a személyes adataimat.",
   "prompt_name": "v1.1",
   "model_name": "qwen2.5-0.5b-instruct"
 }

@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.preprocessing import PreprocessingCategory
+from app.schemas.preprocessing import PreprocessingCategory, PreprocessingResponse
 
 
 class ModelParameters(BaseModel):
@@ -39,15 +39,26 @@ class GenerationRequest(BaseModel):
                 raise ValueError("reference_answer must not be blank.")
         return value
 
-    def to_input_data(self) -> dict[str, object]:
+    def to_input_data(
+        self,
+        preprocessing_result: PreprocessingResponse | None = None,
+    ) -> dict[str, object]:
         if self.message is not None:
+            if preprocessing_result is None:
+                raise ValueError("A preprocessing result is required for message input.")
             return {
-                "customerMessage": self.message,
-                "cleanedText": self.message,
-                "caseType": self.category or "OTHER",
-                "structuredCaseState": self.facts or {},
-                "ruleDecision": "provide_information",
-                "ruleReason": "No rule-engine decision was provided.",
+                "customerMessage": preprocessing_result.message,
+                "cleanedText": preprocessing_result.message,
+                "caseType": (
+                    self.category
+                    if self.category is not None
+                    else preprocessing_result.category
+                ),
+                "structuredCaseState": (
+                    self.facts if self.facts is not None else preprocessing_result.facts
+                ),
+                "ruleDecision": "not_evaluated",
+                "ruleReason": "No rule-engine decision is available.",
                 "matchedRules": [],
                 "responsePlan": {
                     "tone": "professional",

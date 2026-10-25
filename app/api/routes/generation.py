@@ -7,6 +7,7 @@ from app.schemas.generation import (
     GenerationResponse,
     ModelOption,
 )
+from app.schemas.preprocessing import PreprocessingResponse
 from app.services.generation_service import ModelGenerationError
 from app.services.llm_service import (
     InvalidModelParameters,
@@ -22,8 +23,8 @@ _ERROR_RESPONSES = {
         404: "The requested prompt version was not found.",
         422: "Request validation failed.",
         500: "Unexpected internal error.",
-        503: "The generation service or model is unavailable.",
-        504: "The generation dependency reported a timeout.",
+        503: "A preprocessing or generation dependency is unavailable.",
+        504: "A preprocessing or generation dependency timed out.",
     }.items()
 }
 
@@ -62,8 +63,53 @@ def generate_response(
     if generation_service is None:
         raise APIError(503, "GENERATION_UNAVAILABLE", "The generation service is unavailable.")
 
+    preprocessing_result = None
+    if payload.message is not None:
+        state_builder = request.app.state.state_builder
+        if state_builder is None:
+            raise APIError(
+                503,
+                "PREPROCESSING_UNAVAILABLE",
+                "The preprocessing pipeline is not configured.",
+            )
+        try:
+            preprocessing_result = PreprocessingResponse.model_validate(
+                state_builder.build(payload.message)
+            )
+        except TimeoutError as error:
+            raise APIError(
+                504,
+                "PREPROCESSING_TIMEOUT",
+                "The preprocessing request timed out.",
+            ) from error
+        except (RuntimeError, ImportError, OSError) as error:
+            raise APIError(
+                503,
+                "PREPROCESSING_UNAVAILABLE",
+                "The preprocessing models are unavailable.",
+            ) from error
+        except ValueError as error:
+            raise APIError(
+                500,
+                "INTERNAL_SERVER_ERROR",
+                "An internal error occurred during preprocessing.",
+            ) from error
+
+        if not preprocessing_result.message.strip():
+            raise APIError(
+                400,
+                "GENERATION_INPUT_INVALID",
+                "The message must contain non-whitespace text.",
+            )
+        if preprocessing_result.partial_success or preprocessing_result.category is None:
+            raise APIError(
+                503,
+                "PREPROCESSING_INCOMPLETE",
+                "The preprocessing pipeline did not produce complete results.",
+            )
+
     try:
-        input_data = payload.to_input_data()
+        input_data = payload.to_input_data(preprocessing_result)
         result = generation_service.generate_result(
             input_data,
             prompt_name=payload.prompt_name,

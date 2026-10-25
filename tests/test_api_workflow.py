@@ -393,7 +393,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "reference_similarity_metric": None,
             },
         )
-        self.assertEqual(self.model.prompt, "Reply to hello")
+        self.assertEqual(self.model.prompt, "Reply to clean:hello")
         self.assertEqual(self.model.parameters, {"max_new_tokens": 24, "do_sample": False})
 
     def test_generation_uses_requested_model_and_model_specific_parameters(self) -> None:
@@ -443,7 +443,7 @@ class APIWorkflowTests(unittest.TestCase):
             },
         )
         self.assertIsNone(self.model.prompt)
-        self.assertEqual(alternate_model.prompt, "Reply to hello")
+        self.assertEqual(alternate_model.prompt, "Reply to clean:hello")
         self.assertEqual(
             alternate_model.parameters,
             {
@@ -467,7 +467,7 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reference_similarity"], 0.8)
         self.assertEqual(response.json()["reference_similarity_metric"], "token_f1")
-        self.assertEqual(self.model.prompt, "Reply to hello")
+        self.assertEqual(self.model.prompt, "Reply to clean:hello")
 
     def test_generation_rejects_blank_reference_answer(self) -> None:
         response = self.request(
@@ -484,17 +484,29 @@ class APIWorkflowTests(unittest.TestCase):
             facts={"PRODUCT": ["ASUS laptop"]},
             category="DEFECTIVE_PRODUCT",
         )
+        preprocessing_result = PreprocessingResponse(
+            message="Szeretnék segítséget.",
+            facts={"PERSON": []},
+            category="OTHER",
+        )
         structured_request = GenerationRequest(
             input_data={"customerMessage": "Szeretnék segítséget."}
         )
 
+        with self.assertRaises(ValueError):
+            message_request.to_input_data()
         self.assertEqual(
-            message_request.to_input_data()["structuredCaseState"],
+            message_request.to_input_data(preprocessing_result)["structuredCaseState"],
             {"PRODUCT": ["ASUS laptop"]},
         )
         self.assertEqual(
-            message_request.to_input_data()["caseType"],
+            message_request.to_input_data(preprocessing_result)["caseType"],
             "DEFECTIVE_PRODUCT",
+        )
+        self.assertEqual(
+            GenerationRequest(message="Szeretnék segítséget.", facts={})
+            .to_input_data(preprocessing_result)["structuredCaseState"],
+            {},
         )
         self.assertEqual(
             structured_request.to_input_data(),
@@ -512,8 +524,8 @@ class APIWorkflowTests(unittest.TestCase):
             "cleanedText": "A termék meghibásodott.",
             "caseType": "DEFECTIVE_PRODUCT",
             "structuredCaseState": {"PRODUCT": ["ASUS TUF A16 laptop"]},
-            "ruleDecision": "provide_information",
-            "ruleReason": "No rule-engine decision was provided.",
+            "ruleDecision": "not_evaluated",
+            "ruleReason": "No rule-engine decision is available.",
             "matchedRules": [],
             "responsePlan": {
                 "tone": "professional",
@@ -525,7 +537,13 @@ class APIWorkflowTests(unittest.TestCase):
             message=expected_context["customerMessage"],
             facts=expected_context["structuredCaseState"],
             category=expected_context["caseType"],
-        ).to_input_data()
+        ).to_input_data(
+            PreprocessingResponse(
+                message=expected_context["customerMessage"],
+                facts=expected_context["structuredCaseState"],
+                category=expected_context["caseType"],
+            )
+        )
 
         self.assertEqual(
             prompt_variables,
@@ -582,6 +600,107 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("ASUS TUF A16 laptop", self.model.prompt)
         self.assertIn("A hiba alapján további egyeztetés szükséges.", self.model.prompt)
         self.assertNotRegex(self.model.prompt, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+
+    def test_generate_preprocesses_message_before_rendering_prompt(self) -> None:
+        class CapturingStateBuilder(FakeStateBuilder):
+            def __init__(self) -> None:
+                super().__init__()
+                self.received_message = None
+
+            def build(self, message: str) -> dict[str, object]:
+                self.received_message = message
+                return {
+                    "message": "Anonymized and cleaned message",
+                    "facts": {"PRODUCT": ["Laptop"]},
+                    "category": "DEFECTIVE_PRODUCT",
+                    "partial_success": False,
+                    "warnings": [],
+                    "warning_details": {},
+                }
+
+        builder = CapturingStateBuilder()
+        generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=self.generation_service.llm_service,
+        )
+        self.app = create_app(
+            state_builder=builder,
+            generation_service=generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "My name is private, the laptop broke."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(builder.received_message, "My name is private, the laptop broke.")
+        self.assertIn("Anonymized and cleaned message", self.model.prompt)
+        self.assertIn("DEFECTIVE_PRODUCT", self.model.prompt)
+        self.assertIn("Laptop", self.model.prompt)
+        self.assertNotIn("OTHER", self.model.prompt)
+        self.assertNotIn("No rule-engine decision was provided.", self.model.prompt)
+
+    def test_generate_rejects_incomplete_direct_input_data(self) -> None:
+        generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=self.generation_service.llm_service,
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=generation_service,
+        )
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"input_data": {"customerMessage": "Hello"}},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "GENERATION_INPUT_INVALID")
+        self.assertIsNone(self.model.prompt)
+
+    def test_generate_rejects_empty_preprocessed_message(self) -> None:
+        builder = StateBuilder(
+            cleaner=MessageCleaner.clean,
+            anonymizer=MessageAnonymizer.anonymize,
+            extractor=lambda text: {},
+            classifier=lambda text: "OTHER",
+        )
+        self.app = create_app(
+            state_builder=builder,
+            generation_service=self.generation_service,
+        )
+
+        response = self.request("POST", "/generate", json={"message": "  \r\n "})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "GENERATION_INPUT_INVALID")
+        self.assertIsNone(self.model.prompt)
+
+    def test_generate_rejects_partial_preprocessing_result(self) -> None:
+        class PartialStateBuilder:
+            def build(self, message: str) -> dict[str, object]:
+                return {
+                    "message": message,
+                    "facts": {},
+                    "category": "OTHER",
+                    "partial_success": True,
+                    "warnings": ["CLASSIFICATION_UNAVAILABLE"],
+                    "warning_details": {"CLASSIFICATION_UNAVAILABLE": "RuntimeError"},
+                }
+
+        self.app = create_app(
+            state_builder=PartialStateBuilder(),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request("POST", "/generate", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "PREPROCESSING_INCOMPLETE")
+        self.assertIsNone(self.model.prompt)
 
     def test_prompt_version_loads_matching_file_from_prompt_directory(self) -> None:
         with tempfile.TemporaryDirectory() as prompt_directory:
@@ -680,7 +799,7 @@ class APIWorkflowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["prompt_version"], "v2.0")
-        self.assertEqual(self.model.prompt, "New prompt for hello")
+        self.assertEqual(self.model.prompt, "New prompt for clean:hello")
 
     def test_local_model_path_is_not_returned(self) -> None:
         self.model.model_name = r"C:\private\models\customer-model"

@@ -61,16 +61,16 @@ A 0,7-es küszöb működési alapérték, nem magyar tesztkészleten kalibrált
 
 A `POST /generate` kétféle bemenetet fogad:
 
-- `message`: egyszerű üzenet; ebből az API alapértelmezett esetadatokat állít elő. A szöveg ügyfélüzenetként kerül átadásra, a kategória alapértelmezés szerint `OTHER`, a ténylista üres.
-- `input_data`: tetszőleges kulcs-érték objektum, amely közvetlenül a prompt változóit tölti ki.
+- `message`: az API automatikusan lefuttatja rajta a teljes előfeldolgozási láncot (tisztítás, anonimizálás, ténykinyerés és besorolás), és az eredményt használja a prompt kitöltéséhez. Nem indul generálás `OTHER`/üres tényértékekkel pusztán azért, mert a kliens nem futtatta le előre a `/preprocessing` végpontot.
+- `input_data`: teljes promptkontextus, közvetlenül a promptváltozók kitöltésére. Ezt olyan kliens használhatja, amely már előfeldolgozta az üzenetet; minden kiválasztott promptváltozót meg kell adnia.
 
-Legalább az egyik megadása szükséges; ha mindkettő meg van adva, a `message` alapján felépített adatok kerülnek felhasználásra. A DTO a kategóriát és a modellparamétereket ellenőrzi; az ismeretlen felső szintű kérésmező `422 VALIDATION_ERROR`, a nem támogatott modellparaméter `400 MODEL_PARAMETERS_INVALID` választ ad. Ha egyik bemeneti mód sincs megadva, `400 GENERATION_INPUT_INVALID` válasz érkezik. A generálás önmagában nem hívja meg az előfeldolgozást: ha annak eredményeit is használni kell, a kliensnek kell azokat a generálási bemenetbe átadnia.
+Legalább az egyik bemeneti mód szükséges; ha mindkettő meg van adva, a `message` mező élvez elsőbbséget és automatikus előfeldolgozás történik. Ha egyik sincs megadva, `400 GENERATION_INPUT_INVALID` válasz érkezik. Az automatikus előfeldolgozás sikertelensége `503 PREPROCESSING_UNAVAILABLE` vagy `504 PREPROCESSING_TIMEOUT`, részleges eredménye `503 PREPROCESSING_INCOMPLETE`; üres/whitespace üzenet `400 GENERATION_INPUT_INVALID`. Az ismeretlen felső szintű kérésmező `422 VALIDATION_ERROR`, a nem támogatott modellparaméter `400 MODEL_PARAMETERS_INVALID` választ ad.
 
 A promptverzió azonosítója a promptfájl kiterjesztés nélküli neve: `prompt_name: "v1.1"` pontosan a `v1.1.txt` fájlt választja ki a `PROMPT_DIR` könyvtárból. Ha a kérés nem ad meg verziót, a `DEFAULT_PROMPT_NAME` (alapértékben `v1.1`) érvényesül. A válasz `prompt_version` mezője a kiválasztott azonosítót adja vissza. Ismeretlen verzió `404 PROMPT_VERSION_NOT_FOUND` hibát eredményez.
 
-Ha a kérés a `message` mezőt használja, a request modell a következő promptadatokat állítja elő: `customerMessage` és `cleanedText` értéke maga az eredeti üzenet; `caseType` a megadott kategória vagy `OTHER`; `structuredCaseState` a megadott `facts` vagy üres objektum; a `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan` pedig rögzített alapértéket kap. Ebben az útvonalban sem történik tisztítás, anonimizálás, NER vagy automatikus kategorizálás.
+`message` esetén az előfeldolgozás eredményéből származik a `customerMessage` és a `cleanedText` (a tisztított, anonimizált üzenet), a `caseType` (a besorolás), valamint a `structuredCaseState` (a kinyert tények). A kérés opcionális `category` és `facts` mezői ezek értékét felülírhatják; hiányuk esetén a feldolgozás eredménye kerül a promptba. A jelenlegi rendszerben nincs szabálymotor, ezért `ruleDecision` értéke `not_evaluated`, `ruleReason` ezt jelzi, `matchedRules` üres lista; a `responsePlan` szakmai, magyar nyelvű választ kér. A szabálymotor helyőrzők sem sugallják, hogy döntés történt.
 
-Ha a kliens a preprocessing eredményét is szeretné felhasználni, külön meghívja a `/preprocessing` végpontot, majd az eredményt megfelelő kulcsokkal az `input_data` objektumban adja át a `/generate` kérésnek. A `v1.1` prompt helyőrzői: `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan`. A Python `message` rövidítés ezeket a kulcsokat állítja elő (a `facts` értékét `structuredCaseState`-ként, a `category` értékét `caseType`-ként továbbítva); a `cleanedText` kiegészítő mezőt is átadja. ASP.NET kliens az azonos `camelCase` kulcsokat közvetlenül az `input_data` objektumba teheti. A repository nem tartalmaz ASP.NET forráskódot, ezért ez a dokumentált API-szerződés; a kliensoldali DTO-leképezést a .NET projektben kell ehhez igazítani. A prompt csak azokat a mezőket használja, amelyekre a kiválasztott `.txt` sablonban `{{kulcs}}` helyőrző hivatkozik; hiányzó kulcs generálási bemeneti hibát ad, nem marad behelyettesítetlenül a promptban.
+Azonos HTTP-szerződés használható Pythonból és ASP.NET-ből: a `message` mezővel mindkét kliens a szerveroldali előfeldolgozást kéri. Ha a kliens saját előfeldolgozást végez, az `input_data` objektumban kell elküldenie az összes használt promptváltozót: `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan`. A repository nem tartalmaz ASP.NET-forráskódot, ezért annak DTO-leképezését itt nem lehet ellenőrizni; a közös JSON-szerződés mezőnevei camelCase alakúak. A hiányzó promptkulcs `400 GENERATION_INPUT_INVALID` hibát ad, a promptban nem marad behelyettesítetlenül.
 
 A feldolgozás menete:
 
@@ -131,6 +131,7 @@ A kérés `X-Correlation-ID` fejlécét a szerver csak biztonságos karakterekke
 |---|---:|---|
 | Hibás JSON vagy mezővalidáció | `422` | `VALIDATION_ERROR` |
 | Hiányzó generálási bemenet vagy érvénytelen promptadat | `400` | `GENERATION_INPUT_INVALID` |
+| Nem teljes automatikus előfeldolgozási eredmény | `503` | `PREPROCESSING_INCOMPLETE` |
 | Nem támogatott modell vagy modellparaméter | `400` | `MODEL_NOT_SUPPORTED` / `MODEL_PARAMETERS_INVALID` |
 | Nem található promptverzió | `404` | `PROMPT_VERSION_NOT_FOUND` |
 | Modell, prompt vagy preprocessing függőség nem érhető el | `503` | végponttól függő `*_UNAVAILABLE` |
