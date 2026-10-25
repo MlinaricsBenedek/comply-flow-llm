@@ -1,10 +1,76 @@
 import unittest
 
 from app.Preprocessing.extractor import FactExtractor
+from app.Preprocessing.anonymizer import MessageAnonymizer
+from app.Preprocessing.cleaner import MessageCleaner
+from app.Preprocessing.state_builder import StateBuilder
 from app.models.ner_model import NERModel
+from app.schemas.preprocessing import PreprocessingResponse
 
 
 class NERModelTests(unittest.TestCase):
+    def test_extracts_product_and_price_from_anonymized_complaint(self) -> None:
+        message = (
+            "A nevem Kovács Anna; email: anna@example.com. "
+            "A termék amit vásároltam: ASUS TUF A16 laptop, az ára 419000 Ft."
+        )
+        anonymized_message = MessageAnonymizer.anonymize(message)
+        extractor = FactExtractor(
+            NERModel(pipeline_factory=lambda **kwargs: lambda text: [])
+        )
+
+        facts = extractor.extract(anonymized_message)
+
+        self.assertEqual(
+            facts,
+            {
+                "PRODUCT": ["ASUS TUF A16 laptop"],
+                "PRICE": ["419000 Ft"],
+            },
+        )
+        self.assertNotIn("Kovács Anna", anonymized_message)
+        self.assertNotIn("anna@example.com", anonymized_message)
+
+    def test_extracts_formatted_hungarian_prices_and_deduplicates_facts(self) -> None:
+        extractor = FactExtractor(
+            NERModel(pipeline_factory=lambda **kwargs: lambda text: [])
+        )
+
+        facts = extractor.extract(
+            "Termék: ASUS TUF A16; ára 419 000 Ft, kedvezményes ára 419 000 Ft."
+        )
+
+        self.assertEqual(facts["PRODUCT"], ["ASUS TUF A16"])
+        self.assertEqual(facts["PRICE"], ["419 000 Ft"])
+
+    def test_preprocessing_response_serializes_product_and_price_facts(self) -> None:
+        extractor = FactExtractor(
+            NERModel(pipeline_factory=lambda **kwargs: lambda text: [])
+        )
+        builder = StateBuilder(
+            cleaner=MessageCleaner.clean,
+            anonymizer=MessageAnonymizer.anonymize,
+            extractor=extractor.extract,
+            classifier=lambda text: "DEFECTIVE_PRODUCT",
+        )
+
+        result = PreprocessingResponse.model_validate(
+            builder.build(
+                "Név: Kovács Anna email: anna@example.com. "
+                "A termék amit vásároltam: ASUS TUF A16 laptop, az ára 419000 Ft."
+            )
+        ).model_dump()
+
+        self.assertEqual(
+            result["facts"],
+            {
+                "PRODUCT": ["ASUS TUF A16 laptop"],
+                "PRICE": ["419000 Ft"],
+            },
+        )
+        self.assertNotIn("Kovács Anna", result["message"])
+        self.assertNotIn("anna@example.com", result["message"])
+
     def test_loads_hungarian_ner_pipeline_lazily_once(self) -> None:
         factory_calls: list[dict[str, object]] = []
 

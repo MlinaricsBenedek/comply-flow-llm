@@ -99,7 +99,7 @@ A válasz kategóriája az alábbi értékek egyike vagy `null` lehet:
 
 ### 6.2 Tények és entitások
 
-A `facts` mező sztringkulcsokhoz rendelt sztringlistákat tartalmaz. A személy-, hely- és szervezet-entitások címkéi rendre `PERSON`, `LOCATION` és `ORGANIZATION` értékre normalizálódnak; más modellcímkék is megjelenhetnek.
+A `facts` mező sztringkulcsokhoz rendelt sztringlistákat tartalmaz. A személy-, hely- és szervezet-entitások címkéi rendre `PERSON`, `LOCATION` és `ORGANIZATION` értékre normalizálódnak; a célzott mintafelismerés `PRODUCT` és `PRICE` kulcsot is előállíthat. Például `termék amit vásároltam: ASUS TUF A16 laptop, az ára 419000 Ft` esetén: `{"PRODUCT":["ASUS TUF A16 laptop"],"PRICE":["419000 Ft"]}`. A termékfelismerés címkézett termékmondatokra, az ár kinyerése `Ft`, `HUF` vagy `forint` utótagú összegekre korlátozódik; általános entitásfelismerést nem garantál.
 
 ### 6.3 Tárolás
 
