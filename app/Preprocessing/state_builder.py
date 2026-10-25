@@ -1,16 +1,9 @@
 from collections.abc import Callable
 import logging
-from typing import TypedDict
+
+from app.schemas.preprocessing import PreprocessingResponse
 
 logger = logging.getLogger(__name__)
-
-class PreprocessingState(TypedDict):
-    message: str
-    facts: dict[str, list[str]]
-    category: str | None
-    partial_success: bool
-    warnings: list[str]
-    warning_details: dict[str, str]
 
 
 class StateBuilder:
@@ -26,19 +19,16 @@ class StateBuilder:
         self.extractor = extractor
         self.classifier = classifier
 
-    def build(self, message: str | None) -> PreprocessingState:
+    def build(self, message: str | None) -> PreprocessingResponse:
         cleaned_message = self.cleaner(message)
         anonymized_message = self.anonymizer(cleaned_message)
 
         if not anonymized_message.strip():
-            return {
-                "message": "",
-                "facts": {},
-                "category": None,
-                "partial_success": False,
-                "warnings": [],
-                "warning_details": {},
-            }
+            return PreprocessingResponse(
+                message="",
+                facts={},
+                category=None,
+            )
 
         facts: dict[str, list[str]] = {}
         category = None
@@ -71,11 +61,11 @@ class StateBuilder:
                 },
             )
 
-        return {
-            "message": anonymized_message,
-            "facts": facts,
-            "category": category,
-            "partial_success": bool(warnings),
-            "warnings": warnings,
-            "warning_details": warning_details,
-        }
+        return PreprocessingResponse(
+            message=anonymized_message,
+            facts=facts,
+            category=category,
+            partial_success=bool(warnings),
+            warnings=warnings,
+            warning_details=warning_details,
+        )

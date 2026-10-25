@@ -22,6 +22,7 @@ from app.Preprocessing.classifier import MessageClassifier
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import DEFAULT_PROMPT_DIR, PromptService
+from app.schemas.preprocessing import PreprocessingResponse
 
 
 class FakePromptService:
@@ -131,20 +132,66 @@ class APIWorkflowTests(unittest.TestCase):
 
         result = builder.build("Complaint")
 
-        self.assertEqual(result["message"], "Complaint")
-        self.assertEqual(result["facts"], {})
-        self.assertIsNone(result["category"])
-        self.assertTrue(result["partial_success"])
+        self.assertEqual(result.message, "Complaint")
+        self.assertEqual(result.facts, {})
+        self.assertIsNone(result.category)
+        self.assertTrue(result.partial_success)
         self.assertEqual(
-            result["warnings"],
+            result.warnings,
             ["FACT_EXTRACTION_UNAVAILABLE", "CLASSIFICATION_UNAVAILABLE"],
         )
         self.assertEqual(
-            result["warning_details"],
+            result.warning_details,
             {
                 "FACT_EXTRACTION_UNAVAILABLE": "OSError",
                 "CLASSIFICATION_UNAVAILABLE": "RuntimeError",
             },
+        )
+        self.assertIsInstance(result, PreprocessingResponse)
+
+    def test_state_builder_empty_input_uses_the_same_response_schema(self) -> None:
+        builder = StateBuilder(
+            cleaner=lambda text: "",
+            anonymizer=lambda text: text or "",
+            extractor=lambda text: self.fail("Extractor should not run for empty input."),
+            classifier=lambda text: self.fail("Classifier should not run for empty input."),
+        )
+
+        result = builder.build("   ")
+
+        self.assertIsInstance(result, PreprocessingResponse)
+        self.assertEqual(
+            result.model_dump(),
+            {
+                "success": True,
+                "message": "",
+                "facts": {},
+                "category": None,
+                "partial_success": False,
+                "warnings": [],
+                "warning_details": {},
+            },
+        )
+
+    def test_preprocessing_response_rejects_inconsistent_warning_state(self) -> None:
+        with self.assertRaises(ValueError):
+            PreprocessingResponse(
+                message="A feldolgozás részben sikerült.",
+                facts={},
+                category=None,
+                partial_success=False,
+                warnings=["CLASSIFICATION_UNAVAILABLE"],
+                warning_details={"CLASSIFICATION_UNAVAILABLE": "RuntimeError"},
+            )
+
+    def test_preprocessing_openapi_exposes_shared_response_schema(self) -> None:
+        response_schema = self.app.openapi()["paths"]["/preprocessing"]["post"][
+            "responses"
+        ]["200"]["content"]["application/json"]["schema"]
+
+        self.assertEqual(
+            response_schema["$ref"],
+            "#/components/schemas/PreprocessingResponse",
         )
 
     def test_zero_shot_classifier_maps_candidate_label(self) -> None:

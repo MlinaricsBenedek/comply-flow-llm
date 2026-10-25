@@ -37,14 +37,14 @@ def preprocess_message(
         )
 
     try:
-        result = builder.build(payload.message)
-        if result["partial_success"]:
+        result = PreprocessingResponse.model_validate(builder.build(payload.message))
+        if result.partial_success:
             logger.warning(
                 "preprocessing_partial_success",
                 extra={
                     "correlation_id": request.state.correlation_id,
-                    "warnings": result["warnings"],
-                    "warning_details": result["warning_details"],
+                    "warnings": result.warnings,
+                    "warning_details": result.warning_details,
                 },
             )
         return result

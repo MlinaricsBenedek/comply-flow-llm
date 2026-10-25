@@ -51,7 +51,11 @@ A termékkinyerés a `termék: ...` és `termék amit vásároltam: ...` alakoka
 
 A gyorsítótárban lévő magyar modell offline, szintetikus „Kovács Anna ... Budapesten ... Magyar Postánál” tesztmondaton `PER: Kovács Anna`, `LOC: Budapesten` és `ORG: Magyar Post` találatot adott. A szervezetnév végéről az „-ánál” rag lemaradt, tehát az entitáshatárok nem minden esetben pontosak. A pipeline előbb anonimizál: ha egy nevet az anonimizáló felismer, a NER már a `[NAME]` helyettesítőt kapja, nem az eredeti nevet. Ez adatvédelmi szempontból szándékos, így az adott személynév nem kerül a `facts` mezőbe. A modell pontossága nincs átfogó magyar tesztkészleten mérve.
 
-A szabályok a visszatérítést, hibás terméket, kézbesítést, garanciát, lemondást, általános panaszt és néhány ismert információkérést kezelnek. Az egyértelmű szabálytalálat megelőzi a modellt; ha nincs ilyen találat, a zero-shot modell többnyelvű NLI-pontszámai közül az első címkét csak legalább 0,7-es pontszámnál fogadja el, egyébként `OTHER` az eredmény. A 0,7-es küszöb működési alapérték, nem magyar tesztkészleten kalibrált mérési eredmény. A szabályok és a modell magyar panaszokra adott pontossága nincs reprezentatív, címkézett adatkészleten validálva; éles használat előtt ilyen készleten kell mérni.
+A besoroláshoz nem szükséges saját tanítóadat vagy külön tanítási folyamat: az alkalmazás előre betanított többnyelvű NLI-modellt használ, saját szabályokkal kiegészítve. A szabályok a visszatérítést, hibás terméket, kézbesítést, garanciát, lemondást, általános panaszt és néhány ismert információkérést kezelnek. Az egyértelmű szabálytalálat megelőzi a modellt; ha nincs ilyen találat, a zero-shot modell többnyelvű NLI-pontszámai közül az első címkét csak legalább 0,7-es pontszámnál fogadja el, egyébként `OTHER` az eredmény.
+
+A modell futásidejű függőség marad a szabályokkal nem lefedett üzenetekhez: első ilyen besoroláskor a `transformers` könyvtárnak és a `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` modell letöltött vagy cache-elt súlyainak elérhetőnek kell lenniük. A modell neve a `ZERO_SHOT_CLASSIFIER_MODEL` változóval állítható. Ha a modell nem tölthető be, a `StateBuilder` `CLASSIFICATION_UNAVAILABLE` figyelmeztetést ad, kivéve ha a kérésre egy szabály már besorolást adott.
+
+A 0,7-es küszöb működési alapérték, nem magyar tesztkészleten kalibrált mérési eredmény. A szabályok és a modell magyar panaszokra adott pontossága nincs reprezentatív, címkézett adatkészleten validálva; éles használat előtt ilyen készleten kell mérni.
 
 ### Válaszgenerálás
 
@@ -80,7 +84,7 @@ A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás 
 
 ### API-válaszok és hibák
 
-A sikeres `/preprocessing` válasz tartalmazza a `success: true`, `partial_success`, `warnings`, `warning_details`, `message`, `facts` és `category` mezőket. A `partial_success: true` azt jelzi, hogy a tisztítás/anonimizálás sikerült, de egy modellkomponens nem adott eredményt. A `warning_details` kizárólag kivételtípusokat tartalmaz, nem kivételüzenetet vagy fájlútvonalat. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
+A sikeres `/preprocessing` válasz minden esetben az `app.schemas.preprocessing.PreprocessingResponse` Pydantic-modell szerinti JSON. A séma mezői: `success` (mindig `true`), anonimizált `message`, `facts` (sztringkulcsokhoz tartozó sztringlisták), a kategórialista egyik eleme vagy `null`, `partial_success`, valamint a gépi `warnings` kódok és a hozzájuk tartozó `warning_details`. A `partial_success` pontosan akkor `true`, ha legalább egy figyelmeztetés szerepel; minden figyelmeztetéshez pontosan egy részlet tartozik. Modellhiba esetén a többi sikeresen végrehajtott eredmény megmarad. A `warning_details` kizárólag kivételtípusokat tartalmaz, nem kivételüzenetet vagy fájlútvonalat. Üres bemenetnél ugyanez a válaszséma érvényes, üres `message` és `facts`, `null` kategória, valamint üres figyelmeztetéslisták mellett. Az OpenAPI `PreprocessingResponse` sémája ugyanezt a szerződést írja le. A `/models` válasz ugyanígy sikerjelzőt tartalmaz. A `/generate` válasz mezői:
 
 ```json
 {

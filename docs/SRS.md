@@ -67,7 +67,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | Metódus és útvonal | Bemenet | Sikeres válasz | Jelentősebb hibák |
 |---|---|---|---|
 | `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
-| `POST /preprocessing` | `{"message": string}` | `success`, `partial_success`, `warnings`, `warning_details`, `message`, `facts`, `category` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
+| `POST /preprocessing` | `{"message": string}` | Egységes `PreprocessingResponse`: `success`, `message`, `facts`, `category`, `partial_success`, `warnings`, `warning_details` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
 | `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
 | `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters`, `reference_answer` | `success`, `response`, prompt- és modellmetaadatok, valamint `reference_similarity` és `reference_similarity_metric` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
 
@@ -101,6 +101,25 @@ A válasz kategóriája az alábbi értékek egyike vagy `null` lehet:
 
 A `facts` mező sztringkulcsokhoz rendelt sztringlistákat tartalmaz. A személy-, hely- és szervezet-entitások címkéi rendre `PERSON`, `LOCATION` és `ORGANIZATION` értékre normalizálódnak; a célzott mintafelismerés `PRODUCT` és `PRICE` kulcsot is előállíthat. Például `termék amit vásároltam: ASUS TUF A16 laptop, az ára 419000 Ft` esetén: `{"PRODUCT":["ASUS TUF A16 laptop"],"PRICE":["419000 Ft"]}`. A termékfelismerés címkézett termékmondatokra, az ár kinyerése `Ft`, `HUF` vagy `forint` utótagú összegekre korlátozódik; általános entitásfelismerést nem garantál.
 
+A preprocessing sikeres válaszának teljes alakja:
+
+```json
+{
+  "success": true,
+  "message": "Az anonimizált és tisztított üzenet",
+  "facts": {
+    "PRODUCT": ["ASUS TUF A16 laptop"],
+    "PRICE": ["419000 Ft"]
+  },
+  "category": "DEFECTIVE_PRODUCT",
+  "partial_success": false,
+  "warnings": [],
+  "warning_details": {}
+}
+```
+
+Részleges eredménynél a `partial_success` értéke `true`, a `warnings` az érintett komponens gépi kódját tartalmazza, a `warning_details` pedig ugyanahhoz a kódhoz rendeli a kivétel típusát. Modellhiba miatt az adott eredménymező üres marad (`facts: {}` vagy `category: null`), de a válasz továbbra is ugyanazt a sémát követi. Az üres bemenet szintén ezt a sémát használja: üres `message` és `facts`, `null` kategória, `partial_success: false`, üres figyelmeztetésmezők.
+
 ### 6.3 Tárolás
 
 A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementálva. A generálási és előfeldolgozási kérések feldolgozását a kód memóriabeli műveletekkel végzi; a külső naplózásról és megőrzésről nincs specifikáció.
@@ -131,7 +150,7 @@ A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementál
 | `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
 | `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct` |
 
-- A NER és zero-shot modellek első használatkor töltenek be; hálózat/cache vagy modellhiba esetén a preprocessing válasza `partial_success: true` és `warnings` mezőkkel jelzi a kiesett lépést.
+- A besorolás nem igényel saját tanítóadatot vagy tanítási folyamatot: előre betanított zero-shot modellt és szabályalapú eseteket használ. A NER és zero-shot modellek első használatkor töltenek be; hálózat/cache vagy modellhiba esetén a preprocessing válasza `partial_success: true` és `warnings` mezőkkel jelzi a kiesett lépést. A szabályokkal felismert besorolások nem igénylik a zero-shot modellt.
 - A zero-shot `MessageClassifier` alapértelmezett modellje `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`, a `ZERO_SHOT_CLASSIFIER_MODEL` változóval felülírható. A magyar panaszokon elért pontosság nincs validálva.
 
 ## 9. Ismert hiányosságok és nyitott kérdések
