@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-DEFAULT_PROMPT_DIR = Path(r"C:\Users\mlina\Documents\Projektmappa\Prompt")
+DEFAULT_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
 class PromptService:
@@ -16,11 +16,18 @@ class PromptService:
         if not self.prompt_dir.is_dir():
             raise FileNotFoundError(f"Prompt directory does not exist: {self.prompt_dir}")
 
-        self._prompts = {
+        prompts = {
             prompt_file.stem: prompt_file.read_text(encoding="utf-8-sig")
             for prompt_file in sorted(self.prompt_dir.iterdir())
             if prompt_file.is_file() and prompt_file.suffix.lower() == ".txt"
         }
+        if not prompts:
+            raise FileNotFoundError(
+                f"No .txt prompt files found in directory: {self.prompt_dir}"
+            )
+        if any(not prompt.strip() for prompt in prompts.values()):
+            raise ValueError(f"Prompt files must not be empty in directory: {self.prompt_dir}")
+        self._prompts = prompts
 
     def get_prompt(self, name: str) -> str:
         try:

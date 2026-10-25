@@ -53,6 +53,23 @@ def _error_response(
     )
 
 
+def _log_api_error(
+    request: Request,
+    status_code: int,
+    code: str,
+    error: Exception | None = None,
+) -> None:
+    log_method = logger.warning if status_code < 500 else logger.error
+    extra: dict[str, str | int] = {
+        "correlation_id": _correlation_id(request),
+        "status_code": status_code,
+        "error_code": code,
+    }
+    if error is not None:
+        extra["exception_type"] = type(error.__cause__ or error).__name__
+    log_method("api_error", extra=extra)
+
+
 def _read_bool_setting(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -152,12 +169,21 @@ def create_app(
             models=models,
             default_model=default_model,
         )
+        for model_name in llm_service.available_models():
+            llm_service.model_configuration(model_name)
+
         default_prompt = os.getenv("DEFAULT_PROMPT_NAME", "v1.1")
         try:
             prompt_service = PromptService()
             prompt_service.get_prompt(default_prompt)
-        except (OSError, UnicodeError, KeyError):
-            logger.error("generation_prompt_configuration_unavailable")
+        except (OSError, UnicodeError, KeyError, ValueError) as error:
+            logger.error(
+                "generation_prompt_configuration_unavailable",
+                extra={
+                    "prompt_name": default_prompt,
+                    "exception_type": type(error).__name__,
+                },
+            )
             generation_service = None
         else:
             generation_service = GenerationService(
@@ -190,13 +216,11 @@ def create_app(
         try:
             response = await call_next(request)
         except Exception as error:
-            logger.error(
-                "api_request_failed",
-                extra={
-                    "correlation_id": correlation_id,
-                    "operation": operation,
-                    "exception_type": type(error).__name__,
-                },
+            _log_api_error(
+                request,
+                500,
+                "INTERNAL_SERVER_ERROR",
+                error,
             )
             return _error_response(
                 request,
@@ -219,6 +243,7 @@ def create_app(
 
     @application.exception_handler(APIError)
     async def handle_api_error(request: Request, error: APIError):
+        _log_api_error(request, error.status_code, error.code, error)
         return _error_response(
             request,
             error.status_code,
@@ -228,6 +253,7 @@ def create_app(
 
     @application.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, error: RequestValidationError):
+        _log_api_error(request, 422, "VALIDATION_ERROR", error)
         details = [
             {
                 "field": ".".join(str(part) for part in item["loc"]),
@@ -249,17 +275,12 @@ def create_app(
             404: ("RESOURCE_NOT_FOUND", "The requested resource was not found."),
             405: ("METHOD_NOT_ALLOWED", "The request method is not supported."),
         }.get(error.status_code, ("HTTP_ERROR", "The request could not be completed."))
+        _log_api_error(request, error.status_code, code, error)
         return _error_response(request, error.status_code, code, message)
 
     @application.exception_handler(Exception)
     async def handle_internal_error(request: Request, error: Exception):
-        logger.error(
-            "api_internal_error",
-            extra={
-                "correlation_id": _correlation_id(request),
-                "exception_type": type(error).__name__,
-            },
-        )
+        _log_api_error(request, 500, "INTERNAL_SERVER_ERROR", error)
         return _error_response(
             request,
             500,

@@ -48,7 +48,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | FR-01 | A rendszernek a `GET /health` kérésre `{"status":"ok"}` választ kell adnia. | Megvalósítva; ez nem ellenőrzi az LLM vagy az előfeldolgozó rendelkezésre állását. |
 | FR-02 | A `POST /preprocessing` kérésnek egy `message` szöveget kell fogadnia. | Megvalósítva Pydantic-kérésmodellel. |
 | FR-03 | Az előfeldolgozó pipeline-nek normalizálnia kell a Unicode-szöveget, egységesítenie kell a sortöréseket, össze kell vonnia a soron belüli whitespace-t, és korlátoznia kell az egymást követő üres sorokat. | Megvalósítva. |
-| FR-04 | Az előfeldolgozó pipeline-nek ismert személyesadat-mintázatokat helyettesítő címkékkel kell anonimizálnia. | Megvalósítva regexekkel e-mail-címekre, magyar telefonszámokra, IBAN-ra, bankkártyaszámokra, egyes magyar adó-/TAJ-azonosítókra és címkével megadott nevekre. Nem teljes körű adatvédelmi garancia. |
+| FR-04 | Az előfeldolgozó pipeline-nek ismert személyesadat-mintázatokat helyettesítő címkékkel kell anonimizálnia. | Megvalósítva regexekkel e-mail-címekre, magyar telefonszámokra, IBAN-ra, bankkártyaszámokra, egyes magyar adó-/TAJ-azonosítókra, címkézett nevekre, valamint az „a nevem Kovács Anna” és „Kovács Anna vagyok” formájú nevekre. Nem teljes körű adatvédelmi garancia. |
 | FR-05 | Az előfeldolgozó pipeline-nek entitásokat kell kinyernie, majd kategóriát kell rendelnie az üzenethez. | A default `StateBuilder` a NER-Kor/HuBERT entitáskinyerőt és egy többnyelvű NLI-modellre épülő zero-shot osztályozót használ. Modellhiba esetén részleges eredményt és figyelmeztetést ad. |
 | FR-06 | Üres vagy whitespace-re redukálódó üzenet esetén a pipeline üres üzenetet, üres ténylistát és `null` kategóriát adjon vissza. | A `StateBuilder` szintjén megvalósítva. |
 | FR-07 | A `POST /generate` kérés `input_data` objektumot vagy `message` mezőt fogadhat. | Megvalósítva. Ha mindkettő szerepel, a `message` alapján létrehozott bemenet az irányadó. |
@@ -58,6 +58,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | FR-11 | A kliens megadhatja a használni kívánt modellt, vagy elhagyhatja azt az alapértelmezett modell használatához. | Megvalósítva. |
 | FR-12 | A `GET /models` végpontnak fel kell sorolnia a konfigurált modelleket és jeleznie kell az alapértelmezettet. | Megvalósítva. |
 | FR-13 | A generálásnak nem üres szöveges választ kell visszaadnia. | Üres modellválasz esetén a rendszer hibát jelez. |
+| FR-14 | A `POST /generate` opcionális referencia-válasszal számítson token-szintű egyezési pontszámot. | Megvalósítva kis-/nagybetűtől független token-F1-ként; ez lexikai hasonlóság, nem tényszerű pontosság. Referencia nélkül a pontszám és a metrika neve `null`. |
 
 ## 5. Külső interfészek
 
@@ -68,7 +69,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
 | `POST /preprocessing` | `{"message": string}` | `success`, `partial_success`, `warnings`, `warning_details`, `message`, `facts`, `category` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
 | `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
-| `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters` | `success`, `response`, `prompt_version`, `model_name`, `model_id`, tényleges `model_parameters` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
+| `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters`, `reference_answer` | `success`, `response`, prompt- és modellmetaadatok, valamint `reference_similarity` és `reference_similarity_metric` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
 
 A FastAPI alapértelmezett OpenAPI és Swagger UI felülete nincs kikapcsolva.
 
@@ -79,6 +80,7 @@ Hibaválasz minden végponton egységes formátumú: `{"success": false, "error"
 - Az `input_data` általános JSON-objektumként adható át.
 - A `message` alternatív, egyszerű bemenet. Használatakor a rendszer a `cleanedText`, `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan` kulcsokat állítja elő.
 - A `facts`, `category`, `prompt_name`, `model_name` és opcionális `model_parameters` közvetlenül a `message` alapú bemenet létrehozásakor használható.
+- A `reference_answer` opcionális elvárt válasz; csak az értékeléshez használjuk, a modell promptjába nem kerül be. A válasz token-F1 pontszáma 0 és 1 közé esik, és lexikai egyezést mér, nem tényszerű helyességet.
 - Az `input_data` és `message` egyikének hiánya futás közben validációs hibához vezet.
 
 ## 6. Adatkövetelmények
@@ -110,15 +112,15 @@ A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementál
 - **Elérhetőség:** a `/health` válasza nem igazolja az előfeldolgozó, a promptkönyvtár vagy az LLM működőképességét.
 - **Teljesítmény:** válaszidőre, áteresztőképességre, párhuzamosságra és erőforráskorlátokra nincs rögzített célérték. A modell helyi betöltése és inferenciája futtatási környezet- és hardverfüggő; a jelenlegi kód nem állít be inference-időtúllépést. A `504` csak ténylegesen észlelt `TimeoutError` esetén használatos.
 - **Generálási viselkedés:** a modellhívás alapértelmezett maximuma 512 új token; a mintavételezés ki van kapcsolva (`do_sample=False`).
-- **Konfigurálhatóság:** a promptkönyvtár a `PROMPT_DIR` változóval adható meg. Ennek hiányában a kód géphez kötött Windows-alapértelmezett útvonalat használ. A modellnevek környezeti változókkal felülírhatók.
+- **Konfigurálhatóság:** a promptkönyvtár alapértelmezés szerint a repository `prompts` könyvtára; egyedi hely a `PROMPT_DIR` változóval adható meg. A modellnevek és generálási beállítások környezeti változókkal felülírhatók, a modellkonfigurációk induláskor validálódnak.
 - **Naplózás:** a kérések kezdetét és befejezését korrelációs azonosítóval naplózza; a kérés- és választestet nem írja naplóba. A kliensválaszok nem tartalmaznak belső kivételrészletet.
 - **Tesztelhetőség:** az alkalmazásgyár lehetővé teszi a szolgáltatások injektálását; az API workflow tesztjei mockolt modellekkel ellenőrzik a HTTP-szerződést.
 
 ## 8. Telepítési és konfigurációs előfeltételek
 
 - A függőségek a gyökérkönyvtár `requirements.txt` fájljában vannak rögzítve.
-- A `PROMPT_DIR` könyvtárnak léteznie kell, és a használt promptot `.txt` fájlként kell tartalmaznia. A fájlnév kiterjesztés nélküli része a prompt azonosítója; az alapértelmezett azonosító `v1.1`.
-- Az alkalmazás létrehozásakor a promptkönyvtár beolvasásra kerül. Hiányzó promptkönyvtár vagy alapértelmezett prompt esetén az alkalmazás elindul, de a generálási szolgáltatás nem elérhető, és a `/generate` `503` hibát ad.
+- A `prompts` könyvtár tartalmazza a működéshez szükséges `v1.1.txt` alapértelmezett promptot. Egyedi promptkönyvtár a `PROMPT_DIR` változóval adható meg; a könyvtárnak legalább egy nem üres `.txt` fájlt kell tartalmaznia. A fájlnév kiterjesztés nélküli része a prompt azonosítója.
+- Az alkalmazás létrehozásakor a promptkönyvtár beolvasásra kerül, és a konfigurált alapértelmezett promptot ellenőrzi. Hiányzó prompt-konfiguráció esetén az alkalmazás elindul, de a generálási szolgáltatás nem elérhető, és a `/generate` `503` hibát ad.
 - A nyelvi modellek konfigurációja:
 
 | Környezeti változó | Alapértelmezett modellazonosító |
@@ -134,13 +136,11 @@ A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementál
 
 ## 9. Ismert hiányosságok és nyitott kérdések
 
-1. Nincs a repositoryban promptfájl, ezért a szükséges `v1.1` promptot külsőleg kell biztosítani.
-2. Az alkalmazás alapértelmezett konfigurációja nem építi fel az előfeldolgozó pipeline-t.
-3. A zero-shot classifier magyar panaszokon mért pontossága, elfogadási küszöbe és kategórialeírásainak minősége nincs meghatározva.
-4. Az anonimizáló mintázatok pontossági és teljességi követelményei, valamint az anonimizálás utáni adatkezelés szabályai nincsenek rögzítve.
-5. Nincs meghatározva a válaszminőség mérési módja, elfogadási küszöbe vagy jogi megfelelőségi ellenőrzése.
-6. Nincsenek rögzítve telepítési, megfigyelhetőségi, naplózási, adatmegőrzési, SLA- és terhelési célok.
-7. A lokális modellbetöltés és inferencia megszakítására nincs külön timeout-mechanizmus.
+1. A zero-shot classifier magyar panaszokon mért pontossága, elfogadási küszöbe és kategórialeírásainak minősége nincs meghatározva.
+2. Az anonimizáló mintázatok pontossági és teljességi követelményei, valamint az anonimizálás utáni adatkezelés szabályai nincsenek rögzítve.
+3. Nincs meghatározva a válaszminőség mérési módja, elfogadási küszöbe vagy jogi megfelelőségi ellenőrzése.
+4. Nincsenek rögzítve telepítési, megfigyelhetőségi, naplózási, adatmegőrzési, SLA- és terhelési célok.
+5. A lokális modellbetöltés és inferencia megszakítására nincs külön timeout-mechanizmus.
 
 ## 10. Követelmény-elfogadási alap
 

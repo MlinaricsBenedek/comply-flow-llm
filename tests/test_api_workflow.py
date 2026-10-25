@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -14,12 +15,13 @@ Path(_PROMPT_DIRECTORY.name, "v1.1.txt").write_text(
 )
 os.environ["PROMPT_DIR"] = _PROMPT_DIRECTORY.name
 
-from app.Preprocessing.generation import GenerationRequest
+from app.schemas.generation import GenerationRequest
 from app.main import create_app
 from app.Preprocessing.state_builder import StateBuilder
 from app.Preprocessing.classifier import MessageClassifier
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
+from app.services.prompt_service import DEFAULT_PROMPT_DIR, PromptService
 
 
 class FakePromptService:
@@ -205,10 +207,36 @@ class APIWorkflowTests(unittest.TestCase):
                 "model_name": "fake-model",
                 "model_id": "vendor/fake-model",
                 "model_parameters": {"max_new_tokens": 24, "do_sample": False},
+                "reference_similarity": None,
+                "reference_similarity_metric": None,
             },
         )
         self.assertEqual(self.model.prompt, "Reply to hello")
         self.assertEqual(self.model.parameters, {"max_new_tokens": 24, "do_sample": False})
+
+    def test_generation_returns_reference_similarity_when_reference_is_provided(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "message": "hello",
+                "reference_answer": "Generated good reply",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reference_similarity"], 0.8)
+        self.assertEqual(response.json()["reference_similarity_metric"], "token_f1")
+        self.assertEqual(self.model.prompt, "Reply to hello")
+
+    def test_generation_rejects_blank_reference_answer(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "reference_answer": "  "},
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_generation_uses_requested_prompt_version(self) -> None:
         response = self.request(
@@ -367,6 +395,34 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["success"])
         self.assertEqual(response.json()["models"][0]["name"], "fake-model")
+
+    def test_repository_prompt_directory_loads_default_prompt(self) -> None:
+        prompt_service = PromptService(prompt_dir=DEFAULT_PROMPT_DIR)
+
+        self.assertTrue(prompt_service.get_prompt("v1.1").strip())
+
+    def test_prompt_service_rejects_empty_prompt_files(self) -> None:
+        with tempfile.TemporaryDirectory() as prompt_directory:
+            Path(prompt_directory, "empty.txt").write_text("  ", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                PromptService(prompt_dir=prompt_directory)
+
+    def test_default_app_initializes_generation_and_model_catalog(self) -> None:
+        self.app = create_app()
+
+        self.assertIsNotNone(self.app.state.generation_service)
+        response = self.request("GET", "/models")
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(len(response.json()["models"]), 0)
+        self.assertTrue(
+            any(model["is_default"] for model in response.json()["models"])
+        )
+
+    def test_invalid_model_configuration_fails_app_creation(self) -> None:
+        with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan"}):
+            with self.assertRaises(ValueError):
+                create_app()
 
     def test_openapi_documents_error_response_schema(self) -> None:
         responses = self.app.openapi()["paths"]["/generate"]["post"]["responses"]

@@ -1,9 +1,7 @@
-import logging
-
 from fastapi import APIRouter, Request
 
 from app.api.errors import APIError, APIErrorResponse
-from app.Preprocessing.generation import (
+from app.schemas.generation import (
     AvailableModelsResponse,
     GenerationRequest,
     GenerationResponse,
@@ -16,9 +14,7 @@ from app.services.llm_service import (
     UnknownModelError,
 )
 
-
 router = APIRouter()
-logger = logging.getLogger(__name__)
 _ERROR_RESPONSES = {
     status_code: {"model": APIErrorResponse, "description": description}
     for status_code, description in {
@@ -79,46 +75,16 @@ def generate_response(
             ),
         )
     except TimeoutError as error:
-        logger.error(
-            "generation_timed_out",
-            extra={
-                "correlation_id": request.state.correlation_id,
-                "exception_type": type(error).__name__,
-            },
-        )
         raise APIError(504, "GENERATION_TIMEOUT", "The generation request timed out.") from error
     except KeyError as error:
-        logger.warning(
-            "generation_prompt_not_found",
-            extra={"correlation_id": request.state.correlation_id},
-        )
         raise APIError(404, "PROMPT_VERSION_NOT_FOUND", "The requested prompt version was not found.") from error
     except UnknownModelError as error:
-        logger.warning(
-            "generation_model_not_supported",
-            extra={"correlation_id": request.state.correlation_id},
-        )
         raise APIError(400, "MODEL_NOT_SUPPORTED", "The requested model is not supported.") from error
     except InvalidModelParameters as error:
-        logger.warning(
-            "generation_parameters_invalid",
-            extra={"correlation_id": request.state.correlation_id},
-        )
         raise APIError(400, "MODEL_PARAMETERS_INVALID", "The model parameters are invalid.") from error
     except ValueError as error:
-        logger.warning(
-            "generation_input_invalid",
-            extra={"correlation_id": request.state.correlation_id},
-        )
         raise APIError(400, "GENERATION_INPUT_INVALID", "The generation input is invalid.") from error
     except (ModelExecutionError, ModelGenerationError) as error:
-        logger.error(
-            "generation_dependency_failed",
-            extra={
-                "correlation_id": request.state.correlation_id,
-                "exception_type": type(error.__cause__ or error).__name__,
-            },
-        )
         raise APIError(503, "LLM_UNAVAILABLE", "The language model is temporarily unavailable.") from error
 
     return GenerationResponse(
@@ -127,4 +93,15 @@ def generate_response(
         model_name=result.model_name,
         model_id=result.model_id,
         model_parameters=result.model_parameters,
+        reference_similarity=(
+            generation_service.reference_similarity(
+                result.response,
+                payload.reference_answer,
+            )
+            if payload.reference_answer is not None
+            else None
+        ),
+        reference_similarity_metric=(
+            "token_f1" if payload.reference_answer is not None else None
+        ),
     )

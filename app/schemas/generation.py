@@ -1,4 +1,6 @@
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ModelParameters(BaseModel):
@@ -18,6 +20,20 @@ class GenerationRequest(BaseModel):
     prompt_name: str | None = Field(default=None, min_length=1)
     model_name: str | None = Field(default=None, min_length=1)
     model_parameters: ModelParameters | None = None
+    reference_answer: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional expected answer used to calculate lexical similarity.",
+    )
+
+    @field_validator("reference_answer")
+    @classmethod
+    def validate_reference_answer(cls, value: str | None) -> str | None:
+        if value is not None:
+            value = value.strip()
+            if not value:
+                raise ValueError("reference_answer must not be blank.")
+        return value
 
     def to_input_data(self) -> dict[str, object]:
         if self.message is not None:
@@ -47,6 +63,8 @@ class GenerationResponse(BaseModel):
     model_name: str
     model_id: str | None
     model_parameters: dict[str, int | float | bool]
+    reference_similarity: float | None = None
+    reference_similarity_metric: Literal["token_f1"] | None = None
 
 
 class ModelOption(BaseModel):

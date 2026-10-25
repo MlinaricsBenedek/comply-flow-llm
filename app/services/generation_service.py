@@ -1,7 +1,9 @@
 import json
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
+from unicodedata import normalize
 
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
@@ -22,6 +24,7 @@ class ModelGenerationError(RuntimeError):
 
 class GenerationService:
     _placeholder_pattern = re.compile(r"{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}")
+    _word_pattern = re.compile(r"\w+", re.UNICODE)
 
     def __init__(
         self,
@@ -32,6 +35,18 @@ class GenerationService:
         self.prompt_service = prompt_service
         self.llm_service = llm_service
         self.default_prompt = default_prompt
+
+    @classmethod
+    def reference_similarity(cls, response: str, reference_answer: str) -> float:
+        response_tokens = cls._word_pattern.findall(normalize("NFKC", response).casefold())
+        reference_tokens = cls._word_pattern.findall(
+            normalize("NFKC", reference_answer).casefold()
+        )
+        if not response_tokens or not reference_tokens:
+            return 0.0
+
+        overlap = sum((Counter(response_tokens) & Counter(reference_tokens)).values())
+        return round(2 * overlap / (len(response_tokens) + len(reference_tokens)), 4)
 
     def generate(
         self,

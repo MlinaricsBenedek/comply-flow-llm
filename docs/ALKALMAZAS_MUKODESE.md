@@ -30,7 +30,7 @@ Az előfeldolgozó komponensek szerepe:
 | Komponens | Mit csinál? | Használja a generálás automatikusan? |
 |---|---|---|
 | `MessageCleaner` | NFC Unicode-normalizálás, sortörések egységesítése, soron belüli whitespace összevonása és szélső whitespace eltávolítása. | Nem. A `StateBuilder` hívja az előfeldolgozási kérésben. |
-| `MessageAnonymizer` | Regexekkel ismert e-mail-, magyar telefonszám-, IBAN-, kártyaszám-, egyes adó-/TAJ-azonosító- és címkézett névmintákat helyettesít, például `[EMAIL]` értékkel. | Nem. Csak a preprocessing pipeline hívja. |
+| `MessageAnonymizer` | Regexekkel ismert e-mail-, magyar telefonszám-, IBAN-, kártyaszám-, egyes adó-/TAJ-azonosító- és névmintákat helyettesít, például `[EMAIL]` értékkel. A névminta felismeri az „a nevem Kovács Anna” és „Kovács Anna vagyok” formákat is. | Nem. Csak a preprocessing pipeline hívja. |
 | `FactExtractor` | A NER-modell találataiból címkézett tényeket állít össze; többek között a személy-, hely- és szervezetcímkéket egységesíti. | Nem. A preprocessing válasz része, a kliensnek kell továbbadnia. |
 | `NERModel` | A `NYTK/named-entity-recognition-nerkor-hubert-hungarian` Hugging Face modellt használja entitásfelismerésre. | Nem. A `FactExtractor` használja. |
 | `MessageClassifier` | A `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` többnyelvű NLI-modellel zero-shot kategóriabesorolást végez hét magyar nyelvű kategórialeírás alapján. | Igen, az alapértelmezett `StateBuilder` részeként; a modell lustán, az első osztályozásnál töltődik be. |
@@ -59,6 +59,9 @@ A feldolgozás menete:
 2. A prompt `{{kulcs}}` alakú változóit behelyettesíti a bemeneti adatokból. Hiányzó kulcs esetén hiba keletkezik; a lista- és objektumértékek JSON-ként kerülnek a promptba.
 3. Kiválasztja a kért modellt, vagy az alapértelmezettet.
 4. Meghívja a Hugging Face-alapú modellt, majd a nem üres választ a használt prompt és modell metaadataival együtt visszaadja.
+5. Ha a kérés `reference_answer` mezőt is tartalmaz, a rendszer kiszámítja a generált válasz token-szintű F1-egyezését a referencia-válasszal.
+
+A `reference_answer` opcionális, nem kerül be a modell promptjába. Megadásakor a válasz `reference_similarity` mezője 0 és 1 közötti token-F1 pontszámot tartalmaz (1 = teljes tokenegyezés), a `reference_similarity_metric` pedig `token_f1`. A mérés kis-/nagybetűtől független, Unicode-normalizált szótokeneket és ismétlődő szavakat is figyelembe vesz. Ez lexikai egyezés, nem szemantikai vagy tényszerű pontosság: parafrázisnál alacsony lehet, azonos szavak mellett pedig nem igazolja a tények helyességét. Referencia nélkül mindkét mező `null`.
 
 A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás során tölti be. Ezért az első kérés hosszabb ideig tarthat, és a modell elérhetősége, letöltése, valamint a futtatáshoz szükséges erőforrások a környezettől függenek.
 
@@ -76,9 +79,13 @@ A sikeres `/preprocessing` válasz tartalmazza a `success: true`, `partial_succe
   "model_parameters": {
     "max_new_tokens": 512,
     "do_sample": false
-  }
+  },
+  "reference_similarity": 0.8,
+  "reference_similarity_metric": "token_f1"
 }
 ```
+
+Példa referencia-választ tartalmazó kérésre: `{"message":"Hol van a rendelésem?","reference_answer":"A rendelését hamarosan kézbesítjük."}`.
 
 Hiba esetén nincs HTTP 200-as sikernek álcázott válasz. A hibaséma:
 
@@ -105,7 +112,7 @@ A kérés `X-Correlation-ID` fejlécét a szerver csak biztonságos karakterekke
 | A modell vagy pipeline ténylegesen `TimeoutError` kivételt jelez | `504` | `GENERATION_TIMEOUT` / `PREPROCESSING_TIMEOUT` |
 | Nem várt belső hiba | `500` | `INTERNAL_SERVER_ERROR` |
 
-Az app promptkönyvtár vagy alapértelmezett prompt hiányában is elindul; a generálási service ilyenkor nem elérhető, a `/generate` strukturált `503` választ ad. A `/health` továbbra is egyszerű folyamat-állapotjelzés.
+Az alkalmazás alapértelmezés szerint a repository `prompts` könyvtárából tölti be a promptokat, így külön `PROMPT_DIR` beállítás nélkül is elindul a generálási szolgáltatás. Egyedi könyvtár a `PROMPT_DIR` változóval adható meg. Ha a könyvtár vagy az alapértelmezett prompt nem érhető el, az alkalmazás naplózza a konfigurációs hibát, elindul, a `/generate` pedig strukturált `503` választ ad. A `/health` továbbra is egyszerű folyamat-állapotjelzés.
 
 ## API-példák
 
@@ -162,16 +169,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-A promptfájlokat tartalmazó könyvtár beállítása és a fejlesztői szerver indítása PowerShellből:
+A fejlesztői szerver indítása PowerShellből:
 
 ```powershell
-$env:PROMPT_DIR = "C:\utvonal\a\promptokhoz"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 Ne indítsd az alkalmazást egy másik, globális `python` interpreterrel: annak külön csomagkörnyezete van, és hiányozhat belőle például a `transformers`, ami a NER és a zero-shot kategorizáló betöltéséhez szükséges.
 
-A könyvtárnak léteznie kell, és tartalmaznia kell legalább a használni kívánt promptot `.txt` fájlként. A fájl kiterjesztés nélküli neve a prompt azonosítója, például a `v1.1.txt` azonosítója `v1.1`. A promptkönyvtár az alkalmazás indulásakor kerül beolvasásra. A repository jelenleg nem tartalmaz promptfájlt, ezért a `PROMPT_DIR` értékét a futtatási környezetben meg kell adni, vagy a kódban szereplő alapértelmezett könyvtárat kell biztosítani. Hiányzó vagy nem olvasható könyvtár esetén a generálási szolgáltatás 503-mal jelzi az elérhetetlenséget; a `/health` ettől még válaszol.
+A promptkönyvtár alapértelmezett helye a repository `prompts` könyvtára, és tartalmazza a `v1.1.txt` fájlt. Egyedi promptkészlet használatához állítsd be a `PROMPT_DIR` változót, például `$env:PROMPT_DIR = "C:\utvonal\a\promptokhoz"`. A könyvtárnak léteznie kell, és legalább egy nem üres `.txt` fájlt kell tartalmaznia. A fájlnév kiterjesztés nélküli része a prompt azonosítója; például a `v1.1.txt` azonosítója `v1.1`. Az alkalmazás induláskor beolvassa a promptokat, és ellenőrzi az alapértelmezett prompt meglétét. A hiányzó vagy nem olvasható konfiguráció naplóbejegyzést és a generálási végponton `503` választ eredményez; a `/health` ettől még válaszol.
 
 A generálás alapértelmezett promptazonosítója a `DEFAULT_PROMPT_NAME` változóval állítható be; alapértéke `v1.1`. Az API-kérés `prompt_name` mezője ezt felülírhatja. Az induláskor a szolgáltatás ellenőrzi, hogy az alapértelmezett prompt megtalálható-e a betöltött promptok között.
 

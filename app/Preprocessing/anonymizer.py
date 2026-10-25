@@ -1,6 +1,10 @@
 import re
 
 
+_NAME_TOKEN = r"[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+"
+_FULL_NAME = rf"{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{1,2}}"
+
+
 class MessageAnonymizer:
 	_patterns = (
 		("EMAIL", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)),
@@ -27,10 +31,9 @@ class MessageAnonymizer:
 		(
 			"NAME",
 			re.compile(
-				r"\b(?:nevem|név|name)\s*[:=-]\s*"
-				r"[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+"
-				r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+){1,2}",
-				re.IGNORECASE,
+				r"\b(?:(?i:a\s+)?(?i:nevem|név|name)\s*[:=-]?\s*"
+				rf"(?P<marked_name>{_FULL_NAME})"
+				rf"|(?P<introduced_name>{_FULL_NAME})\s+(?i:vagyok))\b"
 			),
 		),
 	)
@@ -41,6 +44,15 @@ class MessageAnonymizer:
 			return ""
 
 		for label, pattern in cls._patterns:
-			message = pattern.sub(f"[{label}]", message)
+			if label == "NAME":
+				message = pattern.sub(
+					lambda match: match.group(0).replace(
+						match.group("marked_name") or match.group("introduced_name"),
+						"[NAME]",
+					),
+					message,
+				)
+			else:
+				message = pattern.sub(f"[{label}]", message)
 
 		return message
