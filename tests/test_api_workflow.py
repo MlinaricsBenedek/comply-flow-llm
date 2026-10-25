@@ -19,6 +19,8 @@ from app.schemas.generation import GenerationRequest
 from app.main import create_app
 from app.Preprocessing.state_builder import StateBuilder
 from app.Preprocessing.classifier import MessageClassifier
+from app.Preprocessing.anonymizer import MessageAnonymizer
+from app.Preprocessing.cleaner import MessageCleaner
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import DEFAULT_PROMPT_DIR, PromptService
@@ -115,6 +117,90 @@ class APIWorkflowTests(unittest.TestCase):
                 "warning_details": {},
             },
         )
+
+    def test_preprocessing_rejects_missing_or_invalid_message(self) -> None:
+        invalid_requests = [
+            {},
+            {"message": None},
+            {"message": 42},
+            {"message": ["not", "text"]},
+        ]
+
+        for payload in invalid_requests:
+            with self.subTest(payload=payload):
+                response = self.request("POST", "/preprocessing", json=payload)
+
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+                self.assertFalse(response.json()["success"])
+                self.assertIn("correlation_id", response.json()["error"])
+
+    def test_preprocessing_rejects_missing_request_body(self) -> None:
+        response = self.request("POST", "/preprocessing")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_preprocessing_empty_and_whitespace_messages_return_empty_schema(self) -> None:
+        builder = StateBuilder(
+            cleaner=MessageCleaner.clean,
+            anonymizer=MessageAnonymizer.anonymize,
+            extractor=lambda text: self.fail("Extractor should not run for empty input."),
+            classifier=lambda text: self.fail("Classifier should not run for empty input."),
+        )
+        self.app = create_app(
+            state_builder=builder,
+            generation_service=self.generation_service,
+        )
+        expected = {
+            "success": True,
+            "message": "",
+            "facts": {},
+            "category": None,
+            "partial_success": False,
+            "warnings": [],
+            "warning_details": {},
+        }
+
+        for message in ("", " \t\r\n "):
+            with self.subTest(message=repr(message)):
+                response = self.request(
+                    "POST",
+                    "/preprocessing",
+                    json={"message": message},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), expected)
+
+    def test_preprocessing_ambiguous_message_uses_other_fallback(self) -> None:
+        classifier = MessageClassifier(
+            pipeline_factory=lambda **kwargs: lambda text, **pipeline_kwargs: {
+                "labels": ["garanciával kapcsolatos"],
+                "scores": [0.55],
+            }
+        )
+        builder = StateBuilder(
+            cleaner=MessageCleaner.clean,
+            anonymizer=MessageAnonymizer.anonymize,
+            extractor=lambda text: {},
+            classifier=classifier.classify,
+        )
+        self.app = create_app(
+            state_builder=builder,
+            generation_service=self.generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/preprocessing",
+            json={"message": "Szeretnék segítséget kérni az ügyemmel kapcsolatban."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["category"], "OTHER")
+        self.assertFalse(response.json()["partial_success"])
+        self.assertEqual(response.json()["warnings"], [])
 
     def test_state_builder_returns_partial_result_for_unavailable_components(self) -> None:
         def fail_extraction(text: str) -> dict[str, list[str]]:
