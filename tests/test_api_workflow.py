@@ -395,6 +395,64 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(self.model.prompt, "Reply to hello")
         self.assertEqual(self.model.parameters, {"max_new_tokens": 24, "do_sample": False})
 
+    def test_generation_uses_requested_model_and_model_specific_parameters(self) -> None:
+        alternate_model = FakeModel()
+        alternate_model.model_name = "vendor/alternate-model"
+        llm_service = LLMService(
+            {
+                "fake-model": self.model,
+                "alternate-model": alternate_model,
+            },
+            "fake-model",
+        )
+        self.generation_service = GenerationService(
+            prompt_service=FakePromptService(),
+            llm_service=llm_service,
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "message": "hello",
+                "model_name": "alternate-model",
+                "model_parameters": {
+                    "max_new_tokens": 48,
+                    "do_sample": True,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model_name"], "alternate-model")
+        self.assertEqual(response.json()["model_id"], "vendor/alternate-model")
+        self.assertEqual(
+            response.json()["model_parameters"],
+            {
+                "max_new_tokens": 48,
+                "do_sample": True,
+                "temperature": 0.7,
+                "top_p": 0.9,
+            },
+        )
+        self.assertIsNone(self.model.prompt)
+        self.assertEqual(alternate_model.prompt, "Reply to hello")
+        self.assertEqual(
+            alternate_model.parameters,
+            {
+                "max_new_tokens": 48,
+                "do_sample": True,
+                "temperature": 0.7,
+                "top_p": 0.9,
+            },
+        )
+
     def test_generation_returns_reference_similarity_when_reference_is_provided(self) -> None:
         response = self.request(
             "POST",
@@ -677,6 +735,33 @@ class APIWorkflowTests(unittest.TestCase):
         with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan"}):
             with self.assertRaises(ValueError):
                 create_app()
+
+    def test_environment_configures_default_model_and_generation_parameters(self) -> None:
+        settings = {
+            "DEFAULT_LLM_MODEL": "qwen2-0.5b-instruct",
+            "QWEN2_MAX_NEW_TOKENS": "96",
+            "QWEN2_DO_SAMPLE": "true",
+            "QWEN2_TEMPERATURE": "0.65",
+            "QWEN2_TOP_P": "0.88",
+        }
+        with patch.dict(os.environ, settings):
+            self.app = create_app()
+
+        self.assertEqual(
+            self.app.state.llm_service.default_model,
+            "qwen2-0.5b-instruct",
+        )
+        configuration = self.app.state.llm_service.model_configuration()
+        self.assertEqual(configuration.model_name, "qwen2-0.5b-instruct")
+        self.assertEqual(
+            configuration.model_parameters,
+            {
+                "max_new_tokens": 96,
+                "do_sample": True,
+                "temperature": 0.65,
+                "top_p": 0.88,
+            },
+        )
 
     def test_openapi_documents_error_response_schema(self) -> None:
         responses = self.app.openapi()["paths"]["/generate"]["post"]["responses"]

@@ -82,7 +82,9 @@ A `reference_answer` opcionális, nem kerül be a modell promptjába. Megadásak
 
 A sikeres válasz a `GenerationResponse` sémát követi: a `success` mindig `true`, a `response` nem üres, a `model_parameters` a ténylegesen alkalmazott értékeket tartalmazza, a `model_id` helyi vagy nem publikálható modellútvonal esetén `null`. A referencia-pontszám és a metrikaneve vagy egyszerre szerepel, vagy mindkettő `null`. A kérés és válasz sémáját az OpenAPI `GenerationRequest` és `GenerationResponse` komponensei is leírják.
 
-A felelősségi határ különálló: a `GenerationService` választ promptot, behelyettesíti a bemeneteket és összeállítja a generálási eredményt; az `LLMService` validálja a modellt és paramétereket, meghívja a kiválasztott modelladaptert, majd visszaadja a modellazonosítót és a tényleges paramétereket is. A konkrét Hugging Face inferenciát az adott modelladapter végzi.
+A felelősségi határ különálló: a `GenerationService` választ promptot, behelyettesíti a bemeneteket, kiválasztja a kért vagy alapértelmezett modell konfigurációját, majd összeállítja a generálási eredményt. Az `LLMService` ellenőrzi a modellválasztást és a paramétereket, majd továbbítja a kérést az adapternek. A `HuggingFaceChatModel` (és a `QwenModel`/`LlamaModel` specializációi) tölti be a tényleges modellt, chat prompttá alakítja az üzenetet, és meghívja a Transformers `model.generate` metódusát.
+
+A modell a `DEFAULT_LLM_MODEL` beállítással választható ki alapértelmezettként, kérésenként pedig a `model_name` mezővel írható felül. A generálási alapértékek globálisan `LLM_MAX_NEW_TOKENS`, `LLM_DO_SAMPLE`, `LLM_TEMPERATURE`, `LLM_TOP_P`, modellenként pedig a modellprefixszel ellátott megfelelő környezeti változókkal módosíthatók. A kérés `model_parameters` mezője egy adott generálásra írhatja felül az értékeket. A válasz a ténylegesen használt modellazonosítót és paramétereket adja vissza.
 
 A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás során tölti be. Ezért az első kérés hosszabb ideig tarthat, és a modell elérhetősége, letöltése, valamint a futtatáshoz szükséges erőforrások a környezettől függenek.
 
