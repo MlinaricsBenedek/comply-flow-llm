@@ -79,9 +79,11 @@ Hibaválasz minden végponton egységes formátumú: `{"success": false, "error"
 
 - Az `input_data` általános JSON-objektumként adható át.
 - A `message` alternatív, egyszerű bemenet. Használatakor a rendszer a `cleanedText`, `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan` kulcsokat állítja elő.
+- Legalább `input_data` vagy `message` szükséges; ha mindkettő szerepel, a `message` az irányadó. A kérés és sikeres válasz az OpenAPI-ban `GenerationRequest` és `GenerationResponse` sémával szerepel.
 - A `facts`, `category`, `prompt_name`, `model_name` és opcionális `model_parameters` közvetlenül a `message` alapú bemenet létrehozásakor használható.
 - A `reference_answer` opcionális elvárt válasz; csak az értékeléshez használjuk, a modell promptjába nem kerül be. A válasz token-F1 pontszáma 0 és 1 közé esik, és lexikai egyezést mér, nem tényszerű helyességet.
 - Az `input_data` és `message` egyikének hiánya futás közben validációs hibához vezet.
+- A `GenerationService` a promptválasztást, behelyettesítést és eredménykoordinációt végzi; az `LLMService` a modell/paraméter kiválasztást és a modelladapter meghívását kezeli.
 
 ## 6. Adatkövetelmények
 

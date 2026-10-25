@@ -72,24 +72,21 @@ class GenerationService:
         selected_prompt_name = prompt_name or self.default_prompt
         selected_prompt = self.prompt_service.get_prompt(selected_prompt_name)
         final_prompt = self._render_prompt(selected_prompt, input_data)
-        selected_model_name, model_id, effective_parameters = (
-            self.llm_service.model_configuration(model_name, model_parameters)
-        )
-
-        response = self.llm_service.send_request(
+        model_result = self.llm_service.execute(
             final_prompt,
-            selected_model_name,
+            model_name,
             model_parameters,
         )
+        response = model_result.response
         if not isinstance(response, str) or not response.strip():
             raise ModelGenerationError("The language model returned an empty response.")
 
         return GenerationResult(
             response=response.strip(),
             prompt_version=selected_prompt_name,
-            model_name=selected_model_name,
-            model_id=model_id,
-            model_parameters=effective_parameters,
+            model_name=model_result.model_name,
+            model_id=model_result.model_id,
+            model_parameters=model_result.model_parameters,
         )
 
     def _render_prompt(

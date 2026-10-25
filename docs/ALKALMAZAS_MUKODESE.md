@@ -64,7 +64,7 @@ A `POST /generate` kétféle bemenetet fogad:
 - `message`: egyszerű üzenet; ebből az API alapértelmezett esetadatokat állít elő. A szöveg ügyfélüzenetként kerül átadásra, a kategória alapértelmezés szerint `OTHER`, a ténylista üres.
 - `input_data`: tetszőleges kulcs-érték objektum, amely közvetlenül a prompt változóit tölti ki.
 
-Ha mindkettő meg van adva, a `message` alapján felépített adatok kerülnek felhasználásra. A generálás önmagában nem hívja meg az előfeldolgozást: ha annak eredményeit is használni kell, a kliensnek kell azokat a generálási bemenetbe átadnia.
+Legalább az egyik megadása szükséges; ha mindkettő meg van adva, a `message` alapján felépített adatok kerülnek felhasználásra. A DTO a kategóriát és a modellparamétereket ellenőrzi; az ismeretlen felső szintű kérésmező `422 VALIDATION_ERROR`, a nem támogatott modellparaméter `400 MODEL_PARAMETERS_INVALID` választ ad. Ha egyik bemeneti mód sincs megadva, `400 GENERATION_INPUT_INVALID` válasz érkezik. A generálás önmagában nem hívja meg az előfeldolgozást: ha annak eredményeit is használni kell, a kliensnek kell azokat a generálási bemenetbe átadnia.
 
 Ha a kérés a `message` mezőt használja, a request modell a következő promptadatokat állítja elő: `customerMessage` és `cleanedText` értéke maga az eredeti üzenet; `caseType` a megadott kategória vagy `OTHER`; `structuredCaseState` a megadott `facts` vagy üres objektum; a `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan` pedig rögzített alapértéket kap. Ebben az útvonalban sem történik tisztítás, anonimizálás, NER vagy automatikus kategorizálás.
 
@@ -79,6 +79,10 @@ A feldolgozás menete:
 5. Ha a kérés `reference_answer` mezőt is tartalmaz, a rendszer kiszámítja a generált válasz token-szintű F1-egyezését a referencia-válasszal.
 
 A `reference_answer` opcionális, nem kerül be a modell promptjába. Megadásakor a válasz `reference_similarity` mezője 0 és 1 közötti token-F1 pontszámot tartalmaz (1 = teljes tokenegyezés), a `reference_similarity_metric` pedig `token_f1`. A mérés kis-/nagybetűtől független, Unicode-normalizált szótokeneket és ismétlődő szavakat is figyelembe vesz. Ez lexikai egyezés, nem szemantikai vagy tényszerű pontosság: parafrázisnál alacsony lehet, azonos szavak mellett pedig nem igazolja a tények helyességét. Referencia nélkül mindkét mező `null`.
+
+A sikeres válasz a `GenerationResponse` sémát követi: a `success` mindig `true`, a `response` nem üres, a `model_parameters` a ténylegesen alkalmazott értékeket tartalmazza, a `model_id` helyi vagy nem publikálható modellútvonal esetén `null`. A referencia-pontszám és a metrikaneve vagy egyszerre szerepel, vagy mindkettő `null`. A kérés és válasz sémáját az OpenAPI `GenerationRequest` és `GenerationResponse` komponensei is leírják.
+
+A felelősségi határ különálló: a `GenerationService` választ promptot, behelyettesíti a bemeneteket és összeállítja a generálási eredményt; az `LLMService` validálja a modellt és paramétereket, meghívja a kiválasztott modelladaptert, majd visszaadja a modellazonosítót és a tényleges paramétereket is. A konkrét Hugging Face inferenciát az adott modelladapter végzi.
 
 A modellt és a tokenizálót az alkalmazás lusta módon, az első generálás során tölti be. Ezért az első kérés hosszabb ideig tarthat, és a modell elérhetősége, letöltése, valamint a futtatáshoz szükséges erőforrások a környezettől függenek.
 

@@ -15,7 +15,11 @@ Path(_PROMPT_DIRECTORY.name, "v1.1.txt").write_text(
 )
 os.environ["PROMPT_DIR"] = _PROMPT_DIRECTORY.name
 
-from app.schemas.generation import GenerationRequest
+from app.schemas.generation import (
+    GenerationRequest,
+    GenerationResponse,
+    ModelParameters,
+)
 from app.main import create_app
 from app.Preprocessing.state_builder import StateBuilder
 from app.Preprocessing.classifier import MessageClassifier
@@ -415,6 +419,79 @@ class APIWorkflowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_generation_request_accepts_message_and_input_data_contracts(self) -> None:
+        message_request = GenerationRequest(
+            message="Szeretnék segítséget.",
+            facts={"PRODUCT": ["ASUS laptop"]},
+            category="DEFECTIVE_PRODUCT",
+        )
+        structured_request = GenerationRequest(
+            input_data={"customerMessage": "Szeretnék segítséget."}
+        )
+
+        self.assertEqual(
+            message_request.to_input_data()["structuredCaseState"],
+            {"PRODUCT": ["ASUS laptop"]},
+        )
+        self.assertEqual(
+            message_request.to_input_data()["caseType"],
+            "DEFECTIVE_PRODUCT",
+        )
+        self.assertEqual(
+            structured_request.to_input_data(),
+            {"customerMessage": "Szeretnék segítséget."},
+        )
+
+    def test_generation_request_rejects_unknown_top_level_fields(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "unexpected": True},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_generation_request_rejects_unknown_categories(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "category": "NOT_A_CATEGORY"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_generation_model_parameters_reject_non_finite_values(self) -> None:
+        with self.assertRaises(ValueError):
+            ModelParameters(temperature=float("nan"))
+        with self.assertRaises(ValueError):
+            ModelParameters(top_p=float("inf"))
+        with self.assertRaises(ValueError):
+            ModelParameters(max_new_tokens=1.5)
+
+    def test_generation_response_requires_consistent_reference_metadata(self) -> None:
+        with self.assertRaises(ValueError):
+            GenerationResponse(
+                response="Generated reply",
+                prompt_version="v1.1",
+                model_name="fake-model",
+                model_id="vendor/fake-model",
+                model_parameters={"max_new_tokens": 32, "do_sample": False},
+                reference_similarity=0.8,
+            )
+
+        valid_response = GenerationResponse(
+            response="Generated reply",
+            prompt_version="v1.1",
+            model_name="fake-model",
+            model_id="vendor/fake-model",
+            model_parameters={"max_new_tokens": 32, "do_sample": False},
+            reference_similarity=0.8,
+            reference_similarity_metric="token_f1",
+        )
+        self.assertEqual(valid_response.reference_similarity, 0.8)
+
     def test_generation_uses_requested_prompt_version(self) -> None:
         response = self.request(
             "POST",
@@ -607,6 +684,21 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("404", responses)
         self.assertIn("503", responses)
         self.assertIn("APIErrorResponse", str(responses["503"]))
+
+    def test_openapi_documents_generation_request_and_response_models(self) -> None:
+        operation = self.app.openapi()["paths"]["/generate"]["post"]
+
+        request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
+        response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+
+        self.assertEqual(
+            request_schema["$ref"],
+            "#/components/schemas/GenerationRequest",
+        )
+        self.assertEqual(
+            response_schema["$ref"],
+            "#/components/schemas/GenerationResponse",
+        )
 
     def test_missing_prompt_directory_keeps_app_available(self) -> None:
         previous_prompt_dir = os.environ.get("PROMPT_DIR")

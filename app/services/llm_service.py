@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 import math
 import re
 from typing import Protocol
@@ -18,6 +19,14 @@ class InvalidModelParameters(ValueError):
 
 class ModelExecutionError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ModelExecutionResult:
+    response: str
+    model_name: str
+    model_id: str | None
+    model_parameters: dict[str, int | float | bool]
 
 
 class LLMService:
@@ -40,20 +49,34 @@ class LLMService:
         model_name: str | None = None,
         model_parameters: Mapping[str, int | float | bool] | None = None,
     ) -> str:
+        return self.execute(prompt, model_name, model_parameters).response
+
+    def execute(
+        self,
+        prompt: str,
+        model_name: str | None = None,
+        model_parameters: Mapping[str, int | float | bool] | None = None,
+    ) -> ModelExecutionResult:
         if not prompt.strip():
             raise ValueError("Prompt must not be empty.")
 
-        selected_model_name, _, parameters = self.model_configuration(
+        selected_model_name, model_id, parameters = self.model_configuration(
             model_name,
             model_parameters,
         )
         model = self._models[selected_model_name]
         try:
-            return model.generate(prompt, **parameters)
+            response = model.generate(prompt, **parameters)
         except TimeoutError:
             raise
         except Exception as error:
             raise ModelExecutionError("The language model could not complete the request.") from error
+        return ModelExecutionResult(
+            response=response,
+            model_name=selected_model_name,
+            model_id=model_id,
+            model_parameters=parameters,
+        )
 
     def model_configuration(
         self,

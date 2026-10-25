@@ -1,22 +1,26 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.preprocessing import PreprocessingCategory
 
 
 class ModelParameters(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    max_new_tokens: int | None = Field(default=None, gt=0)
+    max_new_tokens: int | None = Field(default=None, gt=0, strict=True)
     do_sample: bool | None = Field(default=None, strict=True)
-    temperature: float | None = Field(default=None, gt=0)
-    top_p: float | None = Field(default=None, gt=0, le=1)
+    temperature: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    top_p: float | None = Field(default=None, gt=0, le=1, allow_inf_nan=False)
 
 
 class GenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     input_data: dict[str, object] | None = None
     message: str | None = None
     facts: dict[str, list[str]] | None = None
-    category: str | None = None
+    category: PreprocessingCategory | None = None
     prompt_name: str | None = Field(default=None, min_length=1)
     model_name: str | None = Field(default=None, min_length=1)
     model_parameters: ModelParameters | None = None
@@ -57,14 +61,26 @@ class GenerationRequest(BaseModel):
 
 
 class GenerationResponse(BaseModel):
-    success: bool = True
+    model_config = ConfigDict(extra="forbid")
+
+    success: Literal[True] = True
     response: str
     prompt_version: str
     model_name: str
     model_id: str | None
     model_parameters: dict[str, int | float | bool]
-    reference_similarity: float | None = None
+    reference_similarity: float | None = Field(default=None, ge=0, le=1)
     reference_similarity_metric: Literal["token_f1"] | None = None
+
+    @model_validator(mode="after")
+    def validate_reference_similarity(self) -> "GenerationResponse":
+        if (self.reference_similarity is None) != (
+            self.reference_similarity_metric is None
+        ):
+            raise ValueError(
+                "reference_similarity and its metric must either both be set or both be null."
+            )
+        return self
 
 
 class ModelOption(BaseModel):
