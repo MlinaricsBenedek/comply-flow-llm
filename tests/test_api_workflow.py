@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -499,6 +500,126 @@ class APIWorkflowTests(unittest.TestCase):
             structured_request.to_input_data(),
             {"customerMessage": "Szeretnék segítséget."},
         )
+
+    def test_default_prompt_placeholders_match_python_and_dotnet_context(self) -> None:
+        prompt_service = PromptService(prompt_dir=DEFAULT_PROMPT_DIR)
+        prompt = prompt_service.get_prompt("v1.1")
+        prompt_variables = set(
+            re.findall(r"{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}", prompt)
+        )
+        expected_context = {
+            "customerMessage": "A termék meghibásodott.",
+            "cleanedText": "A termék meghibásodott.",
+            "caseType": "DEFECTIVE_PRODUCT",
+            "structuredCaseState": {"PRODUCT": ["ASUS TUF A16 laptop"]},
+            "ruleDecision": "provide_information",
+            "ruleReason": "No rule-engine decision was provided.",
+            "matchedRules": [],
+            "responsePlan": {
+                "tone": "professional",
+                "language": "Hungarian",
+            },
+        }
+        dotnet_context = expected_context.copy()
+        python_context = GenerationRequest(
+            message=expected_context["customerMessage"],
+            facts=expected_context["structuredCaseState"],
+            category=expected_context["caseType"],
+        ).to_input_data()
+
+        self.assertEqual(
+            prompt_variables,
+            {
+                "customerMessage",
+                "caseType",
+                "structuredCaseState",
+                "ruleDecision",
+                "ruleReason",
+                "matchedRules",
+                "responsePlan",
+            },
+        )
+        self.assertLessEqual(prompt_variables, set(python_context))
+        self.assertLessEqual(prompt_variables, set(dotnet_context))
+
+        python_rendered = self.generation_service._render_prompt(prompt, python_context)
+        dotnet_rendered = self.generation_service._render_prompt(prompt, dotnet_context)
+        self.assertNotRegex(python_rendered, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+        self.assertNotRegex(dotnet_rendered, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+        self.assertIn("A termék meghibásodott.", python_rendered)
+        self.assertIn("ASUS TUF A16 laptop", dotnet_rendered)
+
+    def test_generate_accepts_dotnet_style_input_data_with_prompt_context(self) -> None:
+        prompt_service = PromptService(prompt_dir=DEFAULT_PROMPT_DIR)
+        generation_service = GenerationService(
+            prompt_service=prompt_service,
+            llm_service=LLMService({"fake-model": self.model}, "fake-model"),
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=generation_service,
+        )
+        input_data = {
+            "customerMessage": "A laptop elromlott.",
+            "cleanedText": "A laptop elromlott.",
+            "caseType": "DEFECTIVE_PRODUCT",
+            "structuredCaseState": {"PRODUCT": ["ASUS TUF A16 laptop"]},
+            "ruleDecision": "provide_information",
+            "ruleReason": "A hiba alapján további egyeztetés szükséges.",
+            "matchedRules": [],
+            "responsePlan": {"tone": "professional", "language": "Hungarian"},
+        }
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"input_data": input_data, "prompt_name": "v1.1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["prompt_version"], "v1.1")
+        self.assertIn("A laptop elromlott.", self.model.prompt)
+        self.assertIn("ASUS TUF A16 laptop", self.model.prompt)
+        self.assertIn("A hiba alapján további egyeztetés szükséges.", self.model.prompt)
+        self.assertNotRegex(self.model.prompt, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+
+    def test_prompt_version_loads_matching_file_from_prompt_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as prompt_directory:
+            Path(prompt_directory, "v1.1.txt").write_text(
+                "VERSION_ONE {{customerMessage}}",
+                encoding="utf-8",
+            )
+            Path(prompt_directory, "v2.0.txt").write_text(
+                "VERSION_TWO {{customerMessage}}",
+                encoding="utf-8",
+            )
+            prompt_service = PromptService(prompt_dir=prompt_directory)
+            generation_service = GenerationService(
+                prompt_service=prompt_service,
+                llm_service=LLMService({"fake-model": self.model}, "fake-model"),
+            )
+
+            first_result = generation_service.generate_result(
+                {"customerMessage": "hello"},
+                prompt_name="v1.1",
+            )
+            first_prompt = self.model.prompt
+            second_result = generation_service.generate_result(
+                {"customerMessage": "hello"},
+                prompt_name="v2.0",
+            )
+            second_prompt = self.model.prompt
+            default_result = generation_service.generate_result(
+                {"customerMessage": "hello"},
+            )
+            default_prompt = self.model.prompt
+
+        self.assertEqual(first_result.prompt_version, "v1.1")
+        self.assertEqual(first_prompt, "VERSION_ONE hello")
+        self.assertEqual(second_result.prompt_version, "v2.0")
+        self.assertEqual(second_prompt, "VERSION_TWO hello")
+        self.assertEqual(default_result.prompt_version, "v1.1")
+        self.assertEqual(default_prompt, "VERSION_ONE hello")
 
     def test_generation_request_rejects_unknown_top_level_fields(self) -> None:
         response = self.request(
