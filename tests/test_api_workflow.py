@@ -162,11 +162,14 @@ class APIWorkflowTests(unittest.TestCase):
 
         classifier = MessageClassifier(pipeline_factory=fake_pipeline_factory)
 
-        category = classifier.classify("Hol van a csomagom?")
+        category = classifier.classify("Szeretnék érdeklődni a küldemény állapotáról.")
 
         self.assertEqual(category, "DELIVERY")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["text"], "Hol van a csomagom?")
+        self.assertEqual(
+            calls[0]["text"],
+            "szeretnék érdeklődni a küldemény állapotáról.",
+        )
         self.assertEqual(calls[0]["multi_label"], False)
 
     def test_zero_shot_classifier_loads_pipeline_lazily_once(self) -> None:
@@ -182,10 +185,51 @@ class APIWorkflowTests(unittest.TestCase):
         classifier = MessageClassifier(pipeline_factory=fake_pipeline_factory)
 
         self.assertEqual(factory_calls, [])
-        self.assertEqual(classifier.classify("Elromlott a termék."), "WARRANTY")
-        self.assertEqual(classifier.classify("Még garanciális?"), "WARRANTY")
+        self.assertEqual(classifier.classify("Még meddig érvényes ez?"), "WARRANTY")
+        self.assertEqual(classifier.classify("Erről kérdeznék még."), "WARRANTY")
         self.assertEqual(len(factory_calls), 1)
         self.assertEqual(factory_calls[0]["task"], "zero-shot-classification")
+
+    def test_rule_based_classifier_covers_clear_hungarian_complaints(self) -> None:
+        def fail_if_loaded(**kwargs: object):
+            raise AssertionError("Clear complaint categories should use rules.")
+
+        classifier = MessageClassifier(pipeline_factory=fail_if_loaded)
+        examples = {
+            "A termék elromlott, szeretném visszakapni a pénzem.": "REFUND",
+            "A termék hibás és nem működik.": "DEFECTIVE_PRODUCT",
+            "Hol van a csomagom?": "DELIVERY",
+            "A garanciális javításról érdeklődöm.": "WARRANTY",
+            "Szeretném lemondani a rendelésem.": "CANCELLATION",
+            "A rendelésem szeretném lemondani.": "CANCELLATION",
+            "Panaszt szeretnék tenni az ügyintézés miatt.": "GENERAL_COMPLAINT",
+            "Milyen a nyitvatartásuk hétvégén?": "OTHER",
+        }
+
+        for message, expected_category in examples.items():
+            with self.subTest(message=message):
+                self.assertEqual(classifier.classify(message), expected_category)
+
+    def test_zero_shot_low_confidence_defaults_to_other(self) -> None:
+        classifier = MessageClassifier(
+            pipeline_factory=lambda **kwargs: lambda text, **pipeline_kwargs: {
+                "labels": ["garanciával kapcsolatos"],
+                "scores": [0.55],
+            }
+        )
+
+        self.assertEqual(classifier.classify("Erről szeretnék érdeklődni."), "OTHER")
+
+    def test_zero_shot_rejects_malformed_scores(self) -> None:
+        classifier = MessageClassifier(
+            pipeline_factory=lambda **kwargs: lambda text, **pipeline_kwargs: {
+                "labels": ["garanciával kapcsolatos"],
+                "scores": [],
+            }
+        )
+
+        with self.assertRaises(RuntimeError):
+            classifier.classify("Erről szeretnék érdeklődni.")
 
     def test_generation_success_returns_effective_model_metadata(self) -> None:
         response = self.request(
