@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -940,6 +941,36 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
         self.assertEqual(response.headers["X-Correlation-ID"], "integration-123")
+
+    def test_request_body_is_logged_to_configured_jsonl_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory, "logs", "requests.jsonl")
+            with patch.dict(os.environ, {"REQUEST_LOG_FILE": str(log_file)}):
+                self.app = create_app(
+                    state_builder=FakeStateBuilder(),
+                    generation_service=self.generation_service,
+                )
+                response = self.request(
+                    "POST",
+                    "/preprocessing",
+                    json={"message": "Test request body"},
+                    headers={"X-Correlation-ID": "request-log-test"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            records = [
+                json.loads(line)
+                for line in log_file.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["method"], "POST")
+            self.assertEqual(records[0]["path"], "/preprocessing")
+            self.assertEqual(
+                records[0]["request_body"],
+                {"message": "Test request body"},
+            )
+            self.assertEqual(records[0]["status_code"], 200)
+            self.assertEqual(records[0]["correlation_id"], "request-log-test")
 
     def test_models_response_is_structured(self) -> None:
         response = self.request("GET", "/models")

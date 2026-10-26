@@ -1,5 +1,6 @@
 import os
 import logging
+from pathlib import Path
 import re
 import uuid
 
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.errors import APIError
+from app.api.request_logging import RequestFileLoggingMiddleware
 from app.Preprocessing.state_builder import StateBuilder
 from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
@@ -240,6 +242,17 @@ def create_app(
             },
         )
         return response
+
+    request_log_file = os.getenv("REQUEST_LOG_FILE", "logs/requests.jsonl").strip()
+    if not request_log_file:
+        raise ValueError("REQUEST_LOG_FILE must not be empty.")
+    request_log_path = Path(request_log_file)
+    if not request_log_path.is_absolute():
+        request_log_path = Path(__file__).resolve().parents[1] / request_log_path
+    application.add_middleware(
+        RequestFileLoggingMiddleware,
+        log_file=request_log_path,
+    )
 
     @application.exception_handler(APIError)
     async def handle_api_error(request: Request, error: APIError):

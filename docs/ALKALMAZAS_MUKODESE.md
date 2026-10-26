@@ -203,6 +203,8 @@ A fejlesztői szerver indítása PowerShellből:
 
 Ne indítsd az alkalmazást egy másik, globális `python` interpreterrel: annak külön csomagkörnyezete van, és hiányozhat belőle például a `transformers`, ami a NER és a zero-shot kategorizáló betöltéséhez szükséges.
 
+Az alkalmazás minden HTTP-kérést naplóz a repository `logs/requests.jsonl` fájljába, JSONL formátumban. A napló tartalmazza a teljes kérés törzsét, a végpontot, az időpontot, a válasz státuszkódját és a korrelációs azonosítót. Egyedi fájlútvonal a `REQUEST_LOG_FILE` környezeti változóval adható meg; relatív útvonal esetén a repository gyökérkönyvtárához képest értendő. A kérés törzse személyes vagy bizalmas adatot tartalmazhat, ezért ezt a naplófájlt csak tesztadatokkal használd, ne oszd meg, és töröld, ha már nincs rá szükség.
+
 A promptkönyvtár alapértelmezett helye a repository `prompts` könyvtára, és tartalmazza a `v1.1.txt` fájlt. Egyedi promptkészlet használatához állítsd be a `PROMPT_DIR` változót, például `$env:PROMPT_DIR = "C:\utvonal\a\promptokhoz"`. A könyvtárnak léteznie kell, és legalább egy nem üres `.txt` fájlt kell tartalmaznia. A fájlnév kiterjesztés nélküli része a prompt azonosítója; például a `v1.1.txt` azonosítója `v1.1`. Az alkalmazás induláskor beolvassa a promptokat, és ellenőrzi az alapértelmezett prompt meglétét. A hiányzó vagy nem olvasható konfiguráció naplóbejegyzést és a generálási végponton `503` választ eredményez; a `/health` ettől még válaszol.
 
 A generálás alapértelmezett promptazonosítója a `DEFAULT_PROMPT_NAME` változóval állítható be; alapértéke `v1.1`. Az API-kérés `prompt_name` mezője ezt felülírhatja. Az induláskor a szolgáltatás ellenőrzi, hogy az alapértelmezett prompt megtalálható-e a betöltött promptok között.

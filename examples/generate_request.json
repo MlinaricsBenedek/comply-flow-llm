@@ -1,5 +1,26 @@
 {
-  "message": "Szeretném megtudni, hogyan kezelik a személyes adataimat.",
+  "input_data": {
+    "customerMessage": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
+    "cleanedText": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
+    "caseType": "DELIVERY",
+    "structuredCaseState": {
+      "order_id": "TESZT-123",
+      "delivery_status": "A csomagot 2026-10-24-én átadták a futárnak."
+    },
+    "ruleDecision": "not_evaluated",
+    "ruleReason": "A példa nem futtat szabálymotort.",
+    "matchedRules": [],
+    "responsePlan": {
+      "tone": "professional",
+      "language": "Hungarian"
+    }
+  },
   "prompt_name": "v1.1",
-  "model_name": "qwen2.5-0.5b-instruct"
+  "model_name": "qwen2.5-0.5b-instruct",
+  "model_parameters": {
+    "max_new_tokens": 180,
+    "do_sample": true,
+    "temperature": 0.7,
+    "top_p": 0.9
+  }
 }
