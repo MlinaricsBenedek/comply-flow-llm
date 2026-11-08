@@ -336,6 +336,14 @@ class APIWorkflowTests(unittest.TestCase):
 
         classifier = MessageClassifier(pipeline_factory=fail_if_loaded)
         examples = {
+            "Mekkora a pénzügyi tranzakciós illeték mértéke?": "TRANSACTION_TAX",
+            "Vonatkozik mentesség a tranzakciós illetékre?": "TRANSACTION_TAX",
+            "Mennyi kamat jár a megtakarítási számlára?": "SAVINGS_ACCOUNT_INTEREST",
+            "Milyen kamatsávok vannak a Perselynél?": "SAVINGS_ACCOUNT_INTEREST",
+            "Milyen feltételekkel nyitható megtakarítási számla?": "SAVINGS_ACCOUNT_TERMS",
+            "Ki jogosult a Persely használatára?": "SAVINGS_ACCOUNT_TERMS",
+            "Mennyibe kerül az átutalás díja?": "BANK_TRANSFER_FEES",
+            "Az átutalás tranzakciós illetéke mennyi?": "TRANSACTION_TAX",
             "A megtakarítási számlámról havi díjat vontak le.": "SAVINGS_ACCOUNT_FEES",
             "Panaszt teszek a megtakarítási számla díja miatt.": "SAVINGS_ACCOUNT_FEES",
             "Nem működik a bankkártyám.": "BANKING",
@@ -368,6 +376,21 @@ class APIWorkflowTests(unittest.TestCase):
             classifier.classify("Díjterhelésről szeretnék érdeklődni."),
             "SAVINGS_ACCOUNT_FEES",
         )
+
+    def test_preprocessing_schema_accepts_new_banking_categories(self) -> None:
+        for category in (
+            "TRANSACTION_TAX",
+            "SAVINGS_ACCOUNT_INTEREST",
+            "SAVINGS_ACCOUNT_TERMS",
+            "BANK_TRANSFER_FEES",
+        ):
+            with self.subTest(category=category):
+                result = PreprocessingResponse(
+                    message="Banki ügy",
+                    facts={},
+                    category=category,
+                )
+                self.assertEqual(result.category, category)
 
     def test_zero_shot_low_confidence_defaults_to_other(self) -> None:
         classifier = MessageClassifier(

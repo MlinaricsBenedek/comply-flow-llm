@@ -10,8 +10,12 @@ class MessageClassifier:
 	HYPOTHESIS_TEMPLATE = "Az ügyfél panasza {}."
 	MIN_MODEL_CONFIDENCE = 0.7
 	CANDIDATE_LABELS = {
+		"TRANSACTION_TAX": "pénzügyi tranzakciós illetékkel, annak mértékével vagy mentességével kapcsolatos",
+		"SAVINGS_ACCOUNT_INTEREST": "megtakarítási számla vagy Persely kamatával vagy kamatsávjával kapcsolatos",
+		"SAVINGS_ACCOUNT_TERMS": "megtakarítási számla vagy Persely nyitásával, jogosultságával, használatával vagy megszüntetésével kapcsolatos",
+		"BANK_TRANSFER_FEES": "banki átutalás díjával, költségével vagy jutalékával kapcsolatos",
 		"SAVINGS_ACCOUNT_FEES": "megtakarítási számlák díjaival vagy költségeivel kapcsolatos",
-		"BANKING": "banki szolgáltatással kapcsolatos, például bankszámla, bankkártya vagy átutalás",
+		"BANKING": "egyéb általános banki ügy, például bankszámla, bankkártya vagy átutalás",
 		"REFUND": "visszatérítéssel vagy pénzvisszafizetéssel kapcsolatos",
 		"DEFECTIVE_PRODUCT": "hibás vagy sérült termékkel kapcsolatos",
 		"DELIVERY": "szállítással vagy kézbesítéssel kapcsolatos",
@@ -21,6 +25,44 @@ class MessageClassifier:
 		"OTHER": "egyik felsorolt kategóriába sem illeszkedő ügy",
 	}
 	_RULES = (
+		(
+			"TRANSACTION_TAX",
+			re.compile(
+				r"\b(?:tranzakciós\s+illeték\w*|pénzügyi\s+tranzakciós\s+illeték\w*|"
+				r"illetékmentesség\w*|illeték\s+(?:mérték\w*|összeg\w*|mentesség\w*))\b"
+			),
+		),
+		(
+			"SAVINGS_ACCOUNT_INTEREST",
+			re.compile(
+				r"\b(?:megtakarítás\w*|takarék\w*|persely\w*|lekötött\s+betét\w*|"
+				r"betéti\s+száml\w*)\b.{0,80}\b(?:kamat\w*|kamatsáv\w*|kamatláb\w*)\b|"
+				r"\b(?:kamat\w*|kamatsáv\w*|kamatláb\w*)\b.{0,80}"
+				r"\b(?:megtakarítás\w*|takarék\w*|persely\w*|lekötött\s+betét\w*|"
+				r"betéti\s+száml\w*)\b"
+			),
+		),
+		(
+			"SAVINGS_ACCOUNT_TERMS",
+			re.compile(
+				r"\b(?:megtakarítás\w*|takarék\w*|persely\w*|lekötött\s+betét\w*|"
+				r"betéti\s+száml\w*)\b.{0,80}\b(?:számlanyit\w*|nyit\w*|"
+				r"jogosult\w*|korlátoz\w*|megszüntet\w*|feltétel\w*|használ\w*)\b|"
+				r"\b(?:számlanyit\w*|nyit\w*|jogosult\w*|korlátoz\w*|"
+				r"megszüntet\w*|feltétel\w*|használ\w*)\b.{0,80}"
+				r"\b(?:megtakarítás\w*|takarék\w*|persely\w*|lekötött\s+betét\w*|"
+				r"betéti\s+száml\w*)\b"
+			),
+		),
+		(
+			"BANK_TRANSFER_FEES",
+			re.compile(
+				r"\b(?:átutal\w*|utalás\w*|átvezet\w*)\b.{0,80}"
+				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*)\b|"
+				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*)\b.{0,80}"
+				r"\b(?:átutal\w*|utalás\w*|átvezet\w*)\b"
+			),
+		),
 		(
 			"SAVINGS_ACCOUNT_FEES",
 			re.compile(

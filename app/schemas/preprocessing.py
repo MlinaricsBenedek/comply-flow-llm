@@ -4,6 +4,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 PreprocessingCategory = Literal[
+    "TRANSACTION_TAX",
+    "SAVINGS_ACCOUNT_INTEREST",
+    "SAVINGS_ACCOUNT_TERMS",
+    "BANK_TRANSFER_FEES",
     "SAVINGS_ACCOUNT_FEES",
     "BANKING",
     "REFUND",
