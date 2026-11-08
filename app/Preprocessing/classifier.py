@@ -10,6 +10,8 @@ class MessageClassifier:
 	HYPOTHESIS_TEMPLATE = "Az ügyfél panasza {}."
 	MIN_MODEL_CONFIDENCE = 0.7
 	CANDIDATE_LABELS = {
+		"SAVINGS_ACCOUNT_FEES": "megtakarítási számlák díjaival vagy költségeivel kapcsolatos",
+		"BANKING": "banki szolgáltatással kapcsolatos, például bankszámla, bankkártya vagy átutalás",
 		"REFUND": "visszatérítéssel vagy pénzvisszafizetéssel kapcsolatos",
 		"DEFECTIVE_PRODUCT": "hibás vagy sérült termékkel kapcsolatos",
 		"DELIVERY": "szállítással vagy kézbesítéssel kapcsolatos",
@@ -19,6 +21,25 @@ class MessageClassifier:
 		"OTHER": "egyik felsorolt kategóriába sem illeszkedő ügy",
 	}
 	_RULES = (
+		(
+			"SAVINGS_ACCOUNT_FEES",
+			re.compile(
+				r"\b(?:megtakarítás\w*|takarék\w*|lekötött\s+betét\w*|"
+				r"betéti\s+száml\w*)\b.{0,80}\b(?:díj\w*|költség\w*|"
+				r"levon\w*|terhel\w*|jutalék\w*)\b|"
+				r"\b(?:díj\w*|költség\w*|levon\w*|terhel\w*|jutalék\w*)\b"
+				r".{0,80}\b(?:megtakarítás\w*|takarék\w*|"
+				r"lekötött\s+betét\w*|betéti\s+száml\w*)\b"
+			),
+		),
+		(
+			"BANKING",
+			re.compile(
+				r"\b(?:bank\w*|bankszáml\w*|bankkárty\w*|átutal\w*|"
+				r"utal\w*|folyószáml\w*|hitel\w*|betét\w*|"
+				r"atm|pin-kód\w*|otp)\b"
+			),
+		),
 		(
 			"REFUND",
 			re.compile(

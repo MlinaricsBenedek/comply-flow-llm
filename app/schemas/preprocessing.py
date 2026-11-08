@@ -4,6 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 PreprocessingCategory = Literal[
+    "SAVINGS_ACCOUNT_FEES",
+    "BANKING",
     "REFUND",
     "DEFECTIVE_PRODUCT",
     "DELIVERY",

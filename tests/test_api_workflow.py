@@ -336,6 +336,10 @@ class APIWorkflowTests(unittest.TestCase):
 
         classifier = MessageClassifier(pipeline_factory=fail_if_loaded)
         examples = {
+            "A megtakarítási számlámról havi díjat vontak le.": "SAVINGS_ACCOUNT_FEES",
+            "Panaszt teszek a megtakarítási számla díja miatt.": "SAVINGS_ACCOUNT_FEES",
+            "Nem működik a bankkártyám.": "BANKING",
+            "Kérdésem van az átutalással kapcsolatban.": "BANKING",
             "A termék elromlott, szeretném visszakapni a pénzem.": "REFUND",
             "A termék hibás és nem működik.": "DEFECTIVE_PRODUCT",
             "Hol van a csomagom?": "DELIVERY",
@@ -349,6 +353,21 @@ class APIWorkflowTests(unittest.TestCase):
         for message, expected_category in examples.items():
             with self.subTest(message=message):
                 self.assertEqual(classifier.classify(message), expected_category)
+
+    def test_zero_shot_classifier_maps_banking_candidate_label(self) -> None:
+        classifier = MessageClassifier(
+            pipeline_factory=lambda **kwargs: lambda text, **pipeline_kwargs: {
+                "labels": [
+                    "megtakarítási számlák díjaival vagy költségeivel kapcsolatos"
+                ],
+                "scores": [0.85],
+            }
+        )
+
+        self.assertEqual(
+            classifier.classify("Díjterhelésről szeretnék érdeklődni."),
+            "SAVINGS_ACCOUNT_FEES",
+        )
 
     def test_zero_shot_low_confidence_defaults_to_other(self) -> None:
         classifier = MessageClassifier(
