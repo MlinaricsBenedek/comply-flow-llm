@@ -24,6 +24,7 @@ from app.Preprocessing.extractor import FactExtractor
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
+from app.services.reference_document_loader import ReferenceDocumentLoader
 
 
 logger = logging.getLogger(__name__)
@@ -126,9 +127,28 @@ def _create_default_state_builder() -> StateBuilder:
 def create_app(
     state_builder: StateBuilder | None = None,
     generation_service: GenerationService | None = None,
+    reference_documents_dir: str | Path | None = None,
 ) -> FastAPI:
     if state_builder is None:
         state_builder = _create_default_state_builder()
+
+    configured_documents_dir = (
+        reference_documents_dir
+        if reference_documents_dir is not None
+        else os.getenv("REFERENCE_DOCUMENTS_DIR")
+    )
+    if isinstance(configured_documents_dir, str) and not configured_documents_dir.strip():
+        raise ValueError("REFERENCE_DOCUMENTS_DIR must not be empty.")
+    try:
+        reference_documents = ReferenceDocumentLoader(
+            configured_documents_dir
+        ).load()
+    except (OSError, UnicodeError) as error:
+        logger.error(
+            "reference_documents_unavailable",
+            extra={"exception_type": type(error).__name__},
+        )
+        reference_documents = None
 
     if generation_service is None:
         generation_parameters = {
@@ -304,6 +324,7 @@ def create_app(
     application.state.state_builder = state_builder
     application.state.generation_service = generation_service
     application.state.llm_service = llm_service
+    application.state.reference_documents = reference_documents
 
     application.include_router(generation_router)
     application.include_router(health_router)

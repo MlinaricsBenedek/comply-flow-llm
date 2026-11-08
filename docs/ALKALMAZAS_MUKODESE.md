@@ -140,6 +140,8 @@ A kérés `X-Correlation-ID` fejlécét a szerver csak biztonságos karakterekke
 
 Az alkalmazás alapértelmezés szerint a repository `prompts` könyvtárából tölti be a promptokat, így külön `PROMPT_DIR` beállítás nélkül is elindul a generálási szolgáltatás. Egyedi könyvtár a `PROMPT_DIR` változóval adható meg. Ha a könyvtár vagy az alapértelmezett prompt nem érhető el, az alkalmazás naplózza a konfigurációs hibát, elindul, a `/generate` pedig strukturált `503` választ ad. A `/health` továbbra is egyszerű folyamat-állapotjelzés.
 
+Az alkalmazás induláskor beolvassa a `OTP-Uzletszabalyzat.txt`, `2012. évi CXVI. törvény a pénzügyi.txt` és `OTP-HIRDETMÉNY.txt` fájlokat a felhasználói könyvtárból (Windows alatt alapértelmezés szerint `C:\Users\<felhasználó>`). Másik könyvtár a `REFERENCE_DOCUMENTS_DIR` környezeti változóval adható meg. A szövegek UTF-8, BOM-os UTF-8, BOM-os UTF-16 és magyar Windows-1250 kódolással olvashatók; a speciális magyar karakterek megmaradnak. A fájlok teljes tartalma az alkalmazáson belül az `app.state.reference_documents` értékében található, a fájlnév szerinti kulcsokkal. Jelenleg a tartalmakat nem használja a válaszgenerálás, és külön API-végpont sem adja vissza őket; ez a betöltés a későbbi RAG-integráció előkészítése. Hiányzó vagy nem olvasható dokumentum esetén az alkalmazás naplózza a hibát, és a `reference_documents` értéke `null`.
+
 ## API-példák
 
 Egyszerű generálási kérés:

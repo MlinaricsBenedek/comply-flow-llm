@@ -902,6 +902,26 @@ class APIWorkflowTests(unittest.TestCase):
 
         self.assertIsNotNone(self.app.state.state_builder)
 
+    def test_app_loads_reference_documents_from_configured_directory(self) -> None:
+        expected = {
+            filename: f"Tartalom: {filename} – árvíztűrő"
+            for filename in (
+                "OTP-Uzletszabalyzat.txt",
+                "2012. évi CXVI. törvény a pénzügyi.txt",
+                "OTP-HIRDETMÉNY.txt",
+            )
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for filename, content in expected.items():
+                Path(directory, filename).write_text(content, encoding="utf-8")
+
+            self.app = create_app(
+                generation_service=self.generation_service,
+                reference_documents_dir=directory,
+            )
+
+        self.assertEqual(self.app.state.reference_documents, expected)
+
     def test_preprocessing_unexpected_failure_returns_sanitized_500(self) -> None:
         self.app = create_app(
             state_builder=FakeStateBuilder(KeyError("private detail")),
