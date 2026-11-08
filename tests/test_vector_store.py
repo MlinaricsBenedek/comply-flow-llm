@@ -68,12 +68,36 @@ class FakeCollection:
             ],
         }
 
-    def delete(self, where: dict[str, str]) -> None:
-        self.records = {
-            record_id: record
+    def get(
+        self,
+        where: dict[str, str],
+        include: list[str],
+    ) -> dict[str, list[object]]:
+        records = [
+            (record_id, record)
             for record_id, record in self.records.items()
-            if record["metadata"]["document_name"] != where["document_name"]
+            if record["metadata"]["document_name"] == where["document_name"]
+        ]
+        return {
+            "ids": [record_id for record_id, _ in records],
+            "metadatas": [record["metadata"] for _, record in records],
         }
+
+    def delete(
+        self,
+        where: dict[str, str] | None = None,
+        ids: list[str] | None = None,
+    ) -> None:
+        if ids is not None:
+            for record_id in ids:
+                self.records.pop(record_id, None)
+            return
+        if where is not None:
+            self.records = {
+                record_id: record
+                for record_id, record in self.records.items()
+                if record["metadata"]["document_name"] != where["document_name"]
+            }
 
     @staticmethod
     def _cosine_distance(left: list[float], right: list[float]) -> float:
@@ -182,6 +206,65 @@ class VectorStoreTests(unittest.TestCase):
         self.assertEqual(
             next(iter(self.client.collection.records.values()))["document"],
             "New text",
+        )
+
+    def test_replacing_document_removes_stale_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.create_store(directory)
+            store.replace_document_chunks(
+                "policy.txt",
+                [
+                    DocumentChunk("policy.txt", 0, "First", 0, 5),
+                    DocumentChunk("policy.txt", 1, "Second", 6, 12),
+                    DocumentChunk("policy.txt", 2, "Third", 13, 18),
+                ],
+                [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]],
+            )
+            store.replace_document_chunks(
+                "policy.txt",
+                [DocumentChunk("policy.txt", 0, "Updated", 0, 7)],
+                [[0.0, 1.0]],
+            )
+
+        self.assertEqual(len(self.client.collection.records), 1)
+        record = next(iter(self.client.collection.records.values()))
+        self.assertEqual(record["document"], "Updated")
+        self.assertEqual(record["metadata"]["chunk_index"], 0)
+
+    def test_replacing_document_with_no_chunks_removes_all_old_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.create_store(directory)
+            store.replace_document_chunks(
+                "policy.txt",
+                [DocumentChunk("policy.txt", 0, "Old", 0, 3)],
+                [[1.0, 0.0]],
+            )
+
+            store.replace_document_chunks("policy.txt", [], [])
+
+        self.assertEqual(self.client.collection.records, {})
+
+    def test_replacing_document_removes_noncontiguous_legacy_chunk_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.create_store(directory)
+            store.upsert_chunks(
+                [
+                    DocumentChunk("policy.txt", 0, "Old first", 0, 9),
+                    DocumentChunk("policy.txt", 5, "Legacy chunk", 30, 42),
+                ],
+                [[1.0, 0.0], [0.0, 1.0]],
+            )
+
+            store.replace_document_chunks(
+                "policy.txt",
+                [DocumentChunk("policy.txt", 0, "Updated", 0, 7)],
+                [[0.0, 1.0]],
+            )
+
+        self.assertEqual(len(self.client.collection.records), 1)
+        self.assertEqual(
+            next(iter(self.client.collection.records.values()))["document"],
+            "Updated",
         )
 
     def test_delete_document_removes_only_that_documents_chunks(self) -> None:

@@ -31,6 +31,13 @@ class VectorStore(Protocol):
         embeddings: Sequence[Sequence[float]],
     ) -> None: ...
 
+    def replace_document_chunks(
+        self,
+        document_name: str,
+        chunks: Sequence[DocumentChunk],
+        embeddings: Sequence[Sequence[float]],
+    ) -> None: ...
+
     def search(
         self,
         embedding: Sequence[float],
@@ -71,26 +78,15 @@ class ChromaVectorStore:
         chunks: Sequence[DocumentChunk],
         embeddings: Sequence[Sequence[float]],
     ) -> None:
-        if len(chunks) != len(embeddings):
-            raise ValueError("Each document chunk must have exactly one embedding.")
+        vectors = self._validate_chunks_and_embeddings(chunks, embeddings)
         if not chunks:
             return
 
-        if any(not self._valid_chunk(chunk) for chunk in chunks):
-            raise ValueError("Chunks must include valid source metadata and non-empty text.")
-        vectors = [self._validate_embedding(embedding) for embedding in embeddings]
-        dimensions = len(vectors[0])
-        if any(len(vector) != dimensions for vector in vectors):
-            raise ValueError("All embeddings must have the same dimensions.")
-        chunk_ids = [
-            self._chunk_id(chunk.document_name, chunk.chunk_index)
-            for chunk in chunks
-        ]
-        if len(set(chunk_ids)) != len(chunk_ids):
-            raise ValueError("Chunks must have unique document names and indexes.")
-
         self._collection.upsert(
-            ids=chunk_ids,
+            ids=[
+                self._chunk_id(chunk.document_name, chunk.chunk_index)
+                for chunk in chunks
+            ],
             embeddings=vectors,
             documents=[chunk.text for chunk in chunks],
             metadatas=[
@@ -103,6 +99,69 @@ class ChromaVectorStore:
                 for chunk in chunks
             ],
         )
+
+    def replace_document_chunks(
+        self,
+        document_name: str,
+        chunks: Sequence[DocumentChunk],
+        embeddings: Sequence[Sequence[float]],
+    ) -> None:
+        if not document_name.strip():
+            raise ValueError("document_name must not be empty.")
+        if any(chunk.document_name != document_name for chunk in chunks):
+            raise ValueError("All chunks must belong to the document being replaced.")
+        if any(chunk.chunk_index != index for index, chunk in enumerate(chunks)):
+            raise ValueError("Document chunk indexes must be contiguous and start at zero.")
+
+        self._validate_chunks_and_embeddings(chunks, embeddings)
+        if chunks:
+            self.upsert_chunks(chunks, embeddings)
+
+        existing = self._collection.get(
+            where={"document_name": document_name},
+            include=["metadatas"],
+        )
+        ids = existing.get("ids")
+        metadatas = existing.get("metadatas")
+        if not isinstance(ids, list) or not isinstance(metadatas, list):
+            raise RuntimeError("The vector store returned invalid document records.")
+        if len(ids) != len(metadatas):
+            raise RuntimeError("The vector store returned inconsistent document records.")
+
+        expected_ids = {
+            self._chunk_id(document_name, chunk.chunk_index)
+            for chunk in chunks
+        }
+        stale_ids = []
+        for record_id, metadata in zip(ids, metadatas):
+            if not isinstance(record_id, str) or not isinstance(metadata, Mapping):
+                raise RuntimeError("The vector store returned malformed document metadata.")
+            if record_id not in expected_ids:
+                stale_ids.append(record_id)
+        if stale_ids:
+            self._collection.delete(ids=stale_ids)
+
+    def _validate_chunks_and_embeddings(
+        self,
+        chunks: Sequence[DocumentChunk],
+        embeddings: Sequence[Sequence[float]],
+    ) -> list[list[float]]:
+        if len(chunks) != len(embeddings):
+            raise ValueError("Each document chunk must have exactly one embedding.")
+
+        if any(not self._valid_chunk(chunk) for chunk in chunks):
+            raise ValueError("Chunks must include valid source metadata and non-empty text.")
+        vectors = [self._validate_embedding(embedding) for embedding in embeddings]
+        dimensions = len(vectors[0]) if vectors else None
+        if dimensions is not None and any(len(vector) != dimensions for vector in vectors):
+            raise ValueError("All embeddings must have the same dimensions.")
+        chunk_ids = [
+            self._chunk_id(chunk.document_name, chunk.chunk_index)
+            for chunk in chunks
+        ]
+        if len(set(chunk_ids)) != len(chunk_ids):
+            raise ValueError("Chunks must have unique document names and indexes.")
+        return vectors
 
     def search(
         self,
