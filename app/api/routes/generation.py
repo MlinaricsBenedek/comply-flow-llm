@@ -113,8 +113,16 @@ def generate_response(
 
     try:
         input_data = payload.to_input_data(preprocessing_result)
+        input_data["bank"] = payload.bank
         retrieved_sources = []
-        retriever = getattr(request.app.state, "retriever", None)
+        retrievers = getattr(request.app.state, "retrievers", {})
+        retriever = (
+            retrievers.get(payload.bank)
+            if isinstance(retrievers, dict)
+            else None
+        )
+        if retriever is None and payload.bank == "OTP":
+            retriever = getattr(request.app.state, "retriever", None)
         if retriever is not None:
             query_message = input_data.get("cleanedText") or input_data.get(
                 "customerMessage"

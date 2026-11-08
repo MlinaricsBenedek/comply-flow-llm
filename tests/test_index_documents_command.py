@@ -42,10 +42,38 @@ class IndexDocumentsCommandTests(unittest.TestCase):
 
             index_documents.main()
 
-        loader_factory.assert_called_once_with("C:\\reference-documents")
+        loader_factory.assert_called_once_with(bank="OTP")
         loader.load.assert_called_once_with()
         embedding_factory.assert_called_once_with(model_name="test/model")
         indexer_factory.return_value.index_documents.assert_called_once_with(documents)
+        store.close.assert_called_once_with()
+
+    def test_command_selects_raiffeisen_rule_set(self) -> None:
+        loader = Mock()
+        loader.load.return_value = {"policy.txt": "Szabályzat"}
+        store = Mock()
+        with (
+            patch.object(
+                index_documents,
+                "ReferenceDocumentLoader",
+                return_value=loader,
+            ) as loader_factory,
+            patch.object(index_documents, "EmbeddingService", return_value=object()),
+            patch.object(
+                index_documents,
+                "ChromaVectorStore",
+                return_value=store,
+            ) as store_factory,
+            patch.object(index_documents, "DocumentIndexer") as indexer_factory,
+        ):
+            indexer_factory.return_value.index_documents.return_value = (
+                IndexingResult(document_count=1, chunk_count=1)
+            )
+            index_documents.main(bank="Raiffeisen")
+
+        loader_factory.assert_called_once_with(bank="Raiffeisen")
+        store_factory.assert_called_once_with(bank="Raiffeisen")
+        loader.load.assert_called_once_with()
         store.close.assert_called_once_with()
 
     def test_empty_document_directory_setting_is_reported(self) -> None:

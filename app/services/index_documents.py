@@ -1,3 +1,4 @@
+import argparse
 import os
 
 from app.services.document_chunker import DocumentChunker
@@ -10,17 +11,12 @@ from app.services.reference_document_loader import ReferenceDocumentLoader
 from app.services.vector_store import ChromaVectorStore
 
 
-def main() -> None:
-    document_directory = os.getenv("REFERENCE_DOCUMENTS_DIR")
-    if document_directory is not None:
-        document_directory = document_directory.strip()
-        if not document_directory:
-            raise ValueError("REFERENCE_DOCUMENTS_DIR must not be empty.")
-    documents = ReferenceDocumentLoader(document_directory).load()
+def main(bank: str = "OTP") -> None:
+    documents = ReferenceDocumentLoader(bank=bank).load()
     embedding_service = EmbeddingService(
         model_name=os.getenv("EMBEDDING_MODEL_NAME", DEFAULT_EMBEDDING_MODEL)
     )
-    vector_store = ChromaVectorStore()
+    vector_store = ChromaVectorStore(bank=bank)
     try:
         result = DocumentIndexer(
             chunker=DocumentChunker(),
@@ -37,4 +33,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Index a bank's reference documents.")
+    parser.add_argument(
+        "--bank",
+        choices=("OTP", "Raiffeisen"),
+        default="OTP",
+        help="Which bank's reference documents to index (default: OTP).",
+    )
+    main(bank=parser.parse_args().bank)

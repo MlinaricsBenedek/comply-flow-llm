@@ -753,6 +753,69 @@ class APIWorkflowTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 422)
 
+    def test_generate_uses_only_the_requested_bank_retriever(self) -> None:
+        class BankRetriever:
+            def __init__(self, bank: str) -> None:
+                self.bank = bank
+                self.called = False
+
+            def retrieve(self, **kwargs: object) -> list[RetrievedSource]:
+                self.called = True
+                return [
+                    RetrievedSource(
+                        document_name=f"{self.bank}-rules.txt",
+                        chunk_index=0,
+                        text=f"{self.bank} szabály",
+                        start_char=0,
+                        end_char=14,
+                        similarity=0.95,
+                    )
+                ]
+
+        otp_retriever = BankRetriever("OTP")
+        raiffeisen_retriever = BankRetriever("Raiffeisen")
+        self.app.state.retrievers = {
+            "OTP": otp_retriever,
+            "Raiffeisen": raiffeisen_retriever,
+        }
+
+        default_response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "Kérdésem van."},
+        )
+        self.assertEqual(default_response.status_code, 200)
+        self.assertTrue(otp_retriever.called)
+        self.assertFalse(raiffeisen_retriever.called)
+        self.assertEqual(
+            default_response.json()["sources"][0]["document_name"],
+            "OTP-rules.txt",
+        )
+
+        otp_retriever.called = False
+        raiffeisen_response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "Kérdésem van.", "bank": "Raiffeisen"},
+        )
+        self.assertEqual(raiffeisen_response.status_code, 200)
+        self.assertFalse(otp_retriever.called)
+        self.assertTrue(raiffeisen_retriever.called)
+        self.assertEqual(
+            raiffeisen_response.json()["sources"][0]["document_name"],
+            "Raiffeisen-rules.txt",
+        )
+
+    def test_generate_rejects_unknown_bank(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "Kérdésem van.", "bank": "Other"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
     def test_retrieval_can_be_enabled_with_environment_configuration(self) -> None:
         vector_store = object()
         with (

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.services.reference_document_loader import (
+    BANK_DOCUMENT_FILENAMES,
     REFERENCE_DOCUMENT_FILENAMES,
     ReferenceDocumentLoader,
 )
@@ -34,6 +35,25 @@ class ReferenceDocumentLoaderTests(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 ReferenceDocumentLoader(directory).load()
+
+    def test_loads_only_selected_raiffeisen_documents(self) -> None:
+        expected = {
+            filename: f"Szabály: {filename}"
+            for filename in BANK_DOCUMENT_FILENAMES["Raiffeisen"]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for filename, content in expected.items():
+                Path(directory, filename).write_text(content, encoding="utf-8")
+            documents = ReferenceDocumentLoader(
+                directory,
+                bank="Raiffeisen",
+            ).load()
+
+        self.assertEqual(documents, expected)
+
+    def test_unsupported_bank_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            ReferenceDocumentLoader(bank="Unknown")
 
 
 if __name__ == "__main__":

@@ -1,118 +1,137 @@
 # Szoftverkövetelmény-specifikáció (SRS)
 
 **Projekt:** Comply Flow AI Service  
-**A dokumentum célja:** a repositoryban található implementáció jelenlegi állapotának rögzítése  
-**Állapot:** implementációalapú, nem célállapotot leíró specifikáció
+**A dokumentum célja:** a repositoryban megvalósított szolgáltatás és üzleti logika dokumentálása
+**Állapot:** implementációalapú leírás; nem jövőbeli célállapot vagy jogi megfelelőségi ígéret
 
 ## 1. Bevezetés
 
-### 1.1 Cél
+### 1.1 Cél és hatókör
 
-Ez a dokumentum a Comply Flow AI Service jelenleg megvalósított funkcióit, API-ját, működési feltételeit és ismert korlátait írja le. A specifikáció a forráskód alapján készült; nem tekintendő olyan képesség ígéretének, amelyhez a repositoryban nincs implementáció vagy konfiguráció.
+Ez a dokumentum a Comply Flow AI Service jelenlegi HTTP API-ját, feldolgozási folyamatait, modell- és adattároló-integrációit, valamint működési korlátait írja le. A szolgáltatás FastAPI-alapú backend, amely ügyfélüzeneteket tisztít, anonimizál, tényeket nyer ki és kategorizál, továbbá prompt és nyelvi modell segítségével válaszokat generál. Opcionálisan előre indexelt referencia-dokumentumokból releváns részleteket keres.
 
-### 1.2 Hatókör
+A repositoryban nincs felhasználói felület, hitelesítési vagy jogosultságkezelési réteg, adatbázis az ügyfélügyeknek, illetve önálló szabálymotor. A `ruleDecision`, `ruleReason` és `matchedRules` mezők a generálás számára átadott kontextusok; a szolgáltatás ezeket nem állítja elő szabálymotorral.
 
-A szolgáltatás egy FastAPI-alapú backend, amely fogyasztói vagy ügyfélszolgálati üzenetek előfeldolgozására, valamint prompt és nyelvi modell felhasználásával történő válaszgenerálásra ad API-t. A repository nem tartalmaz felhasználói felületet, adatbázist vagy önálló szabálymotort.
+### 1.2 Fogalmak
 
-### 1.3 Fogalmak
+- **Előfeldolgozás:** Unicode-normalizálás, szövegtisztítás, mintázatalapú anonimizálás, entitás- és ténykinyerés, ügytípus-besorolás.
+- **Prompt:** a `prompts` könyvtár `.txt` fájljából betöltött sablon; a `{{kulcs}}` alakú változók bemeneti mezőkből töltődnek ki.
+- **LLM:** a válaszgeneráláshoz használt, Hugging Face Transformers-alapú nyelvi modell.
+- **RAG / retrieval:** beágyazásalapú keresés az előre indexelt referencia-dokumentumok szövegrészletei között.
+- **Részleges előfeldolgozási siker:** a tisztítás és anonimizálás elkészült, de a ténykinyerés vagy a besorolás valamelyike nem állt rendelkezésre.
 
-- **Előfeldolgozás:** az üzenet tisztítása, mintázatalapú anonimizálása, entitásainak kinyerése és kategorizálása.
-- **Prompt:** külső `.txt` fájlból betöltött szövegsablon; a `{{kulcs}}` formájú változók a bemeneti adatokból helyettesítődnek.
-- **LLM:** a generáláshoz használt nyelvi modell.
-- **SRS:** szoftverkövetelmény-specifikáció.
+## 2. Rendszeráttekintés és folyamatok
 
-## 2. Rendszeráttekintés
+### 2.1 Külső végpontok
 
-A szolgáltatás három fő útvonalat biztosít:
+Az alkalmazás alapértelmezés szerint az alábbi, URL-prefix nélküli végpontokat teszi elérhetővé:
 
-1. `GET /health` – egyszerű állapotjelzés.
-2. `POST /preprocessing` – üzenet előfeldolgozása, amennyiben a pipeline be van konfigurálva.
-3. `GET /models` és `POST /generate` – elérhető generatív modellek listázása és válasz előállítása.
+- `GET /health`
+- `POST /preprocessing`
+- `GET /models`
+- `POST /generate`
 
-A generálás folyamata: a kérés bemenetének normalizálása, prompt kiválasztása és változóinak behelyettesítése, a kiválasztott LLM meghívása, majd a generált szöveg visszaadása. A Hugging Face modellek és tokenizálók betöltése lusta módon, az első generálási kérésnél történik.
+A FastAPI alapértelmezett `/openapi.json`, `/docs` és `/redoc` felületei aktívak.
 
-## 3. Felhasználói szerepkörök és külső rendszerek
+### 2.2 Előfeldolgozási folyamat
 
-- **API-fogyasztó:** HTTP-kéréseket küld a health, preprocessing és generation végpontokra.
-- **Üzemeltető/fejlesztő:** megadja a promptkönyvtárat és szükség esetén felülírja a modellneveket környezeti változókkal.
-- **Külső modellforrás:** a Hugging Face modell- és tokenizáló-azonosítók alapján szolgáltatott artefaktumok. A szükséges modell elérhetősége és letöltése futtatási környezetfüggő.
+1. A tisztító NFC Unicode-normalizálást végez, egységesíti a sortöréseket, soronként összevonja a whitespace-t, és legfeljebb egy üres sort hagy egymás után.
+2. Az anonimizáló ismert mintákat helyettesítő címkékre cserél.
+3. Üres vagy whitespace-szövegnél a folyamat üres `message` és `facts`, `null` `category` értékkel tér vissza; a modelleket nem kell meghívnia.
+4. Nem üres szövegnél a ténykinyerés és kategorizálás egymástól függetlenül fut.
+5. Ha valamelyik modellkomponens hibázik, az adott kimeneti mező üres marad, és a válasz figyelmeztetéssel, `partial_success: true` értékkel tér vissza. A másik komponens ettől még sikerülhet.
 
-A jelenlegi kódban nincs hitelesítési vagy jogosultságkezelési szerepkör.
+### 2.3 Generálási folyamat
 
-## 4. Funkcionális követelmények
+1. A kliens vagy közvetlen `input_data` objektumot küld, vagy `message` mezőt ad meg.
+2. `message` esetén a szolgáltatás előfeldolgozza az üzenetet. A generálás csak nem üres üzenet, nem részleges előfeldolgozás és nem `null` kategória esetén folytatódik.
+3. Ha a retrieval be van kapcsolva és elérhető, a szolgáltatás a tisztított üzenet, kategória, kinyert tények és kapott szabálykontextus alapján keres dokumentumrészleteket.
+4. A prompt szolgáltatás kiválasztja a promptot, majd behelyettesíti a bemeneti adatokat.
+5. Az LLM szolgáltatás kiválasztja a modellt, validálja a paramétereket, és meghívja a modellt.
+6. A generálási szolgáltatás elutasítja az üres, belső promptformátumú vagy a rendelkezésre álló szabálydöntéssel nem alátámasztott válaszokat.
+7. Az API visszaadja a választ és a modell/prompt metaadatait, valamint – ha kértek – a referencia-válasszal számított token-F1 pontszámot.
 
-Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik.
+## 3. Üzleti logika
 
-| Azonosító | Követelmény | Jelenlegi állapot |
-|---|---|---|
-| FR-01 | A rendszernek a `GET /health` kérésre `{"status":"ok"}` választ kell adnia. | Megvalósítva; ez nem ellenőrzi az LLM vagy az előfeldolgozó rendelkezésre állását. |
-| FR-02 | A `POST /preprocessing` kérésnek egy `message` szöveget kell fogadnia. | Megvalósítva Pydantic-kérésmodellel. |
-| FR-03 | Az előfeldolgozó pipeline-nek normalizálnia kell a Unicode-szöveget, egységesítenie kell a sortöréseket, össze kell vonnia a soron belüli whitespace-t, és korlátoznia kell az egymást követő üres sorokat. | Megvalósítva. |
-| FR-04 | Az előfeldolgozó pipeline-nek ismert személyesadat-mintázatokat helyettesítő címkékkel kell anonimizálnia. | Megvalósítva regexekkel e-mail-címekre, magyar telefonszámokra, IBAN-ra, bankkártyaszámokra, egyes magyar adó-/TAJ-azonosítókra, címkézett nevekre, valamint az „a nevem Kovács Anna” és „Kovács Anna vagyok” formájú nevekre. Nem teljes körű adatvédelmi garancia. |
-| FR-05 | Az előfeldolgozó pipeline-nek entitásokat kell kinyernie, majd kategóriát kell rendelnie az üzenethez. | A default `StateBuilder` a magyar NER-Kor/HuBERT entitáskinyerőt használja; a `PER`, `LOC`, `ORG` címkéket `PERSON`, `LOCATION`, `ORGANIZATION` kulcsokra képezi le. Egy helyi próba megmutatta, hogy az entitáshatárok (például a névragok) hibásak lehetnek. A besorolás egyértelmű esetekben magyar szabályokat, máskülönben többnyelvű NLI zero-shot modellt használ; 0,7 alatti modellpontszámnál `OTHER` az eredmény. Modellhiba esetén részleges eredményt és figyelmeztetést ad. A magyar kategóriapontosság reprezentatív adatkészleten nincs validálva. |
-| FR-06 | Üres vagy whitespace-re redukálódó üzenet esetén a pipeline üres üzenetet, üres ténylistát és `null` kategóriát adjon vissza. | A `StateBuilder` szintjén megvalósítva. |
-| FR-07 | A `POST /generate` kérés `input_data` objektumot vagy `message` mezőt fogadhat. | Megvalósítva. Ha mindkettő szerepel, a `message` alapján létrehozott bemenet az irányadó. |
-| FR-08 | `message` használatakor a rendszer a szöveget ügyfélüzenetként adja át az előfeldolgozás eredményével és a rendelkezésre álló szabálykontextussal; belső választerv-JSON nem kerül a promptba. | Megvalósítva; a prompt írja elő a rövid, udvarias magyar választ. |
-| FR-09 | A generálásnak a megadott promptot, vagy ennek hiányában a `v1.1` promptot kell használnia. | Megvalósítva; a promptnak betöltött `.txt` fájlként léteznie kell. |
-| FR-10 | A prompt `{{kulcs}}` változóit a bemeneti adatok megfelelő értékeivel kell helyettesíteni; hiányzó kulcs esetén hibát kell jelezni. | Megvalósítva. Általános lista-, tuple- és szótárértékek JSON-ként kerülnek beillesztésre; a retrieval szövege egyszerű szövegként szerepel. |
-| FR-11 | A kliens megadhatja a használni kívánt modellt, vagy elhagyhatja azt az alapértelmezett modell használatához. | Megvalósítva. |
-| FR-12 | A `GET /models` végpontnak fel kell sorolnia a konfigurált modelleket és jeleznie kell az alapértelmezettet. | Megvalósítva. |
-| FR-13 | A generálásnak nem üres, ügyfélnek szánt szöveges választ kell visszaadnia, belső promptcímkék, ténykinyerési JSON vagy táblázat nélkül. | Üres, belső formátumú választ, illetve `not_evaluated` mellett jogos/jogtalan döntést visszaadó modellválasz esetén a rendszer hibát jelez, nem adja vissza ügyfélválaszként. |
-| FR-14 | A `POST /generate` opcionális referencia-válasszal számítson token-szintű egyezési pontszámot. | Megvalósítva kis-/nagybetűtől független token-F1-ként; ez lexikai hasonlóság, nem tényszerű pontosság. Referencia nélkül a pontszám és a metrika neve `null`. |
+### 3.1 Tisztítás és anonimizálás
 
-## 5. Külső interfészek
+Az anonimizáló a következő ismert mintázatokat helyettesíti: e-mail-cím (`[EMAIL]`), magyar telefonszám (`[PHONE]`), IBAN (`[IBAN]`), 13–19 számjegyű bankkártyaszám (`[CARD]`), címkézett TAJ-/adóazonosító-/adószám (`[ID]`), valamint bizonyos címkézett vagy „… vagyok” alakú teljes személynevek (`[NAME]`). A névfelismerés és az egyéb reguláris kifejezések nem általános személyesadat-felismerők.
 
-### 5.1 HTTP API
+Az anonimizálás csak az előfeldolgozás eredményére és az abból épített `message` alapú generálási bemenetre vonatkozik. A közvetlenül küldött `input_data`-t a szolgáltatás nem dolgozza át automatikusan. Az anonimizálás nem teljes körű adatvédelmi garancia.
 
-| Metódus és útvonal | Bemenet | Sikeres válasz | Jelentősebb hibák |
-|---|---|---|---|
-| `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
-| `POST /preprocessing` | `{"message": string}` | Egységes `PreprocessingResponse`: `success`, `message`, `facts`, `category`, `partial_success`, `warnings`, `warning_details` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
-| `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
-| `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters`, `reference_answer` | `success`, `response`, prompt- és modellmetaadatok, valamint `reference_similarity` és `reference_similarity_metric` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba vagy belső prompttartalmat visszaadó kimenet; `504` tényleges timeout; `500` nem várt hiba. |
+### 3.2 Tény- és entitáskinyerés
 
-A FastAPI alapértelmezett OpenAPI és Swagger UI felülete nincs kikapcsolva.
+A `facts` sztringkulcsokhoz rendelt sztringlisták objektuma. A célzott reguláris kifejezések:
 
-Hibaválasz minden végponton egységes formátumú: `{"success": false, "error": {"code": string, "message": string, "correlation_id": string}}`. A request validációs hiba `details` mezője csak mezőútvonalat és validációs kódot tartalmaz, a felhasználói értéket nem. Az `X-Correlation-ID` kérésfejlécet a szolgáltatás validálja, majd a válaszfejlécben is visszaadja. A naplózás nem tartalmaz kérés- vagy választestet.
+- `PRODUCT`: bizonyos „termék …:” kezdetű, címkézett termékleírásokból;
+- `PRICE`: `Ft`, `HUF` vagy `forint` utótagú összegekből.
 
-### 5.2 Generálási kérés részletei
+A NER-modell entitáscímkéi közül a `PER`/`PERSON`, `LOC`/`LOCATION` és `ORG`/`ORGANIZATION` rendre `PERSON`, `LOCATION` és `ORGANIZATION` kulcsra normalizálódik. Az ismétlődő, azonos értékeket a kinyerő egy kulcson belül nem duplikálja. A modell további címkéi is megjelenhetnek saját címkeként. A termék- és árkinyerés, valamint a NER eredménye nem tekinthető teljes vagy validált adatkinyerésnek.
 
-- Az `input_data` általános JSON-objektumként adható át.
-- A `message` alternatív, egyszerű bemenet. Használatakor a rendszer a `cleanedText`, `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason` és `matchedRules` kulcsokat állítja elő; a belső `responsePlan` JSON-t nem adja át a modellnek.
-- Legalább `input_data` vagy `message` szükséges; ha mindkettő szerepel, a `message` az irányadó. A kérés és sikeres válasz az OpenAPI-ban `GenerationRequest` és `GenerationResponse` sémával szerepel.
-- A `facts`, `category`, `prompt_name`, `model_name` és opcionális `model_parameters` közvetlenül a `message` alapú bemenet létrehozásakor használható.
-- A `reference_answer` opcionális elvárt válasz; csak az értékeléshez használjuk, a modell promptjába nem kerül be. A válasz token-F1 pontszáma 0 és 1 közé esik, és lexikai egyezést mér, nem tényszerű helyességet.
-- Az `input_data` és `message` egyikének hiánya futás közben validációs hibához vezet.
-- A `GenerationService` a promptválasztást, behelyettesítést és eredménykoordinációt végzi; az `LLMService` a modell/paraméter kiválasztást és a modelladapter meghívását kezeli.
+### 3.3 Kategorizálás
 
-## 6. Adatkövetelmények
+A besorolás először magyar, reguláris kifejezéseken alapuló szabályokat vizsgál, az alábbi prioritási sorrendben; az első illeszkedő szabály eredménye érvényesül:
 
-### 6.1 Előfeldolgozási kategóriák
+1. `TRANSACTION_TAX`
+2. `SAVINGS_ACCOUNT_INTEREST`
+3. `SAVINGS_ACCOUNT_TERMS`
+4. `BANK_TRANSFER_FEES`
+5. `SAVINGS_ACCOUNT_FEES`
+6. `BANKING`
+7. `REFUND`
+8. `CANCELLATION`
+9. `WARRANTY`
+10. `DELIVERY`
+11. `DEFECTIVE_PRODUCT`
+12. `GENERAL_COMPLAINT`
+13. `OTHER`
 
-A válasz kategóriája az alábbi értékek egyike vagy `null` lehet:
+A szabályok többek között tranzakciós illetékre, megtakarításokra és kamatra, banki díjakra, visszatérítésre, lemondásra, garanciára, szállításra, hibás termékre, általános panaszra és néhány információkérésre keresnek kifejezéseket. Szabálytalálat hiányában a szolgáltatás többnyelvű zero-shot osztályozót hív meg, amely ugyanezeket a kategóriákat használja. A `0,7` alatti modellpontszám `OTHER` eredményt ad. A besorolási minőség magyar panaszokon nincs reprezentatív tesztkészlettel igazolva.
 
-- `REFUND`
-- `DEFECTIVE_PRODUCT`
-- `DELIVERY`
-- `WARRANTY`
-- `CANCELLATION`
-- `GENERAL_COMPLAINT`
-- `OTHER`
+### 3.4 `message` és `input_data` összeállítása
 
-### 6.2 Tények és entitások
+- Legalább `message` vagy `input_data` megadása szükséges. Ha mindkettő szerepel, a `message` alapú bemenet az irányadó.
+- `message` esetén a `cleanedText` és `customerMessage` az anonimizált, tisztított üzenet; `caseType` a kérésben megadott `category`, ha van, egyébként az előfeldolgozás kategóriája.
+- `structuredCaseState` a kérésbeli `facts`, ha megadták, egyébként az előfeldolgozás tényei.
+- `ruleDecision` alapértéke `not_evaluated`; `ruleReason` alapértéke `No rule-engine decision is available.`; `matchedRules` alapértéke üres lista. Ezeket a bemeneti mezőket a kliens biztosíthatja; a backend nem futtat szabálymotort.
+- A `retrievedContext` a találatok szövegéből készül, találat hiányában `Nincs kellően releváns dokumentumrészlet.`.
+- Közvetlen `input_data` esetén a mezőket a kliens biztosítja; a szolgáltatás csak a prompt behelyettesítésekor használt kulcsokat ellenőrzi.
+- A `reference_answer` kizárólag az értékelési pontszámhoz használatos, nem kerül a modell promptjába.
 
-A `facts` mező sztringkulcsokhoz rendelt sztringlistákat tartalmaz. A személy-, hely- és szervezet-entitások címkéi rendre `PERSON`, `LOCATION` és `ORGANIZATION` értékre normalizálódnak; a célzott mintafelismerés `PRODUCT` és `PRICE` kulcsot is előállíthat. Például `termék amit vásároltam: ASUS TUF A16 laptop, az ára 419000 Ft` esetén: `{"PRODUCT":["ASUS TUF A16 laptop"],"PRICE":["419000 Ft"]}`. A termékfelismerés címkézett termékmondatokra, az ár kinyerése `Ft`, `HUF` vagy `forint` utótagú összegekre korlátozódik; általános entitásfelismerést nem garantál.
+### 3.5 Prompt és válaszgenerálás
 
-A preprocessing sikeres válaszának teljes alakja:
+A prompt alapértelmezése `v1.1`, illetve a `DEFAULT_PROMPT_NAME` környezeti változóval módosítható. A fájl kiterjesztés nélküli neve a prompt azonosítója. A `{{ kulcs }}` változóhoz hiányzó bemeneti kulcs érvénytelen generálási bemenet; a `null` érték `Not provided` szöveggé alakul. A lista-, tuple- és szótárértékek olvasható JSON-ként kerülnek a promptba, más értékek szöveges formára alakítódnak.
+
+A válasz nem lehet üres. A szolgáltatás elutasítja a tipikus belső döntési/választerv-fejléceket, JSON-választerveket, táblázatokat, egyes ténykinyerési mezőcímkéket és ismétlődő kimeneteket. Ha a `ruleDecision` nincs kiértékelve, a generált szöveg nem állíthatja, hogy a panasz, díj vagy terhelés jogos/jogtalan. Ezek a kimeneti ellenőrzések heurisztikusak, nem garantálják a modell minden hibájának felismerését.
+
+### 3.6 Dokumentum-visszakeresés
+
+A retrieval opcionális, és alapértelmezés szerint ki van kapcsolva (`RETRIEVAL_ENABLED=false`). Bekapcsolt retrieval esetén a szolgáltatás a keresési lekérdezést a panaszszövegből, kategóriából, tényekből és a rendelkezésre álló szabálymezőkből építi. Üres vektortár esetén nincs találat és beágyazás sem készül.
+
+A `/generate` kérés `bank` mezője választja ki a szabálykészletet: `OTP` vagy `Raiffeisen`; elhagyásakor `OTP` az alapérték. A keresés kizárólag a kiválasztott bank vektorindexét kérdezi le, a két bank tartalma elkülönített tárolóútvonalon van, így a másik bank dokumentumai nem keverednek a találatok közé. A keresés legfeljebb `top_k` találatot kér; a távolságból `similarity = 1 - distance` képlettel számol hasonlóságot, majd az értéket 0 és 1 közé korlátozza. Csak az alapértelmezett vagy kérésbeli küszöböt elérő találatok maradnak meg. Alapértelmezés: `top_k=5`, minimális hasonlóság `0,7`. A generálási prompt a releváns szövegrészleteket kapja meg, az API-válasz pedig a forrás dokumentumnevét, részletindexét, szövegét, karakterpozícióit és hasonlóságát is visszaadja.
+
+A szolgáltatás normál induláskor nem olvassa be a szabályfájlokat; azokat külön kell indexelni. A `/generate` bankválasztása a már előre indexelt, bankonként elkülönített vektortárat választja ki; ha a retrieval be van kapcsolva, csak az adott bank indexe kerül lekérdezésre. A dokumentumok indexelése külön parancs: `python -m app.services.index_documents --bank OTP` vagy `python -m app.services.index_documents --bank Raiffeisen`. Egy parancsfutás csak a kiválasztott bank dokumentumait olvassa be és indexeli.
+
+## 4. HTTP API-szerződés
+
+Minden végpont ugyanazt a korrelációs azonosítót használja a válasz `X-Correlation-ID` fejlécében. A kliens által küldött, legfeljebb 128 karakteres, engedélyezett karaktereket tartalmazó `X-Correlation-ID` elfogadható; egyébként a szolgáltatás UUID-t hoz létre.
+
+### 4.1 `GET /health`
+
+- **Bemenet:** nincs.
+- **Siker:** `200 {"status":"ok"}`.
+- **Jelentés:** az alkalmazás HTTP-rétege válaszol; az endpoint nem ellenőrzi az LLM, az előfeldolgozó modellek, a promptok vagy a vektortár állapotát.
+
+### 4.2 `POST /preprocessing`
+
+- **Kérés:** `{"message": string}`.
+- **Sikeres válasz:** `PreprocessingResponse`:
 
 ```json
 {
   "success": true,
   "message": "Az anonimizált és tisztított üzenet",
-  "facts": {
-    "PRODUCT": ["ASUS TUF A16 laptop"],
-    "PRICE": ["419000 Ft"]
-  },
+  "facts": {"PRODUCT": ["ASUS TUF A16 laptop"], "PRICE": ["419000 Ft"]},
   "category": "DEFECTIVE_PRODUCT",
   "partial_success": false,
   "warnings": [],
@@ -120,55 +139,157 @@ A preprocessing sikeres válaszának teljes alakja:
 }
 ```
 
-Részleges eredménynél a `partial_success` értéke `true`, a `warnings` az érintett komponens gépi kódját tartalmazza, a `warning_details` pedig ugyanahhoz a kódhoz rendeli a kivétel típusát. Modellhiba miatt az adott eredménymező üres marad (`facts: {}` vagy `category: null`), de a válasz továbbra is ugyanazt a sémát követi. Az üres bemenet szintén ezt a sémát használja: üres `message` és `facts`, `null` kategória, `partial_success: false`, üres figyelmeztetésmezők.
+- `category` a 3.3. szakasz kategóriáinak egyike vagy `null`.
+- Részleges eredménynél a `warnings` a `FACT_EXTRACTION_UNAVAILABLE` és/vagy `CLASSIFICATION_UNAVAILABLE` kódot tartalmazza; a `warning_details` ugyanazokhoz a kódokhoz a kivétel típusát rendeli. Ilyenkor `partial_success: true`, és a megfelelő `facts` üres, illetve `category` null.
+- Üres vagy whitespace bemenetnél az anonimizált `message` és a `facts` üres, a `category` null; a válasz nem részleges siker.
+- **Hibák:** `422 VALIDATION_ERROR` hibás kérésnél; `503 PREPROCESSING_UNAVAILABLE`, ha a pipeline vagy modell nem érhető el; `504 PREPROCESSING_TIMEOUT` tényleges `TimeoutError` esetén; `500 INTERNAL_SERVER_ERROR` más feldolgozási hibánál.
 
-### 6.3 Tárolás
+### 4.3 `GET /models`
 
-A repositoryban nincs adatbázis vagy tartós üzletiadat-tárolás implementálva. A generálási és előfeldolgozási kérések feldolgozását a kód memóriabeli műveletekkel végzi; a külső naplózásról és megőrzésről nincs specifikáció.
+- **Bemenet:** nincs.
+- **Siker:** `{"success":true,"models":[{"name":"qwen2.5-0.5b-instruct","is_default":true}, ...]}`.
+- A lista az alkalmazásban konfigurált modellkulcsokat adja vissza; az `is_default` jelzi az alapértelmezett modellt.
+- **Hiba:** `503 LLM_UNAVAILABLE`, ha az LLM szolgáltatás nincs konfigurálva.
 
-## 7. Nem funkcionális követelmények és korlátok
+### 4.4 `POST /generate`
 
-- **Adatvédelem:** az anonimizálás regexalapú és csak meghatározott mintázatokra terjed ki. Nem garantálja valamennyi személyes adat felismerését, és nem helyettesít adatvédelmi felülvizsgálatot.
-- **Biztonság:** hitelesítés, jogosultságkezelés, sebességkorlátozás és titokkezelési konfiguráció nincs megvalósítva a vizsgált kódban. Éles telepítésnél ezekről külön kell gondoskodni.
-- **Elérhetőség:** a `/health` válasza nem igazolja az előfeldolgozó, a promptkönyvtár vagy az LLM működőképességét.
-- **Teljesítmény:** válaszidőre, áteresztőképességre, párhuzamosságra és erőforráskorlátokra nincs rögzített célérték. A modell helyi betöltése és inferenciája futtatási környezet- és hardverfüggő; a jelenlegi kód nem állít be inference-időtúllépést. A `504` csak ténylegesen észlelt `TimeoutError` esetén használatos.
-- **Generálási viselkedés:** a modellhívás alapértelmezett maximuma 512 új token; a mintavételezés ki van kapcsolva (`do_sample=False`).
-- **Konfigurálhatóság:** a promptkönyvtár alapértelmezés szerint a repository `prompts` könyvtára; egyedi hely a `PROMPT_DIR` változóval adható meg. A modellnevek és generálási beállítások környezeti változókkal felülírhatók, a modellkonfigurációk induláskor validálódnak.
-- **Naplózás:** a kérések kezdetét és befejezését korrelációs azonosítóval naplózza; a kérés- és választestet nem írja naplóba. A kliensválaszok nem tartalmaznak belső kivételrészletet.
-- **Tesztelhetőség:** az alkalmazásgyár lehetővé teszi a szolgáltatások injektálását; az API workflow tesztjei mockolt modellekkel ellenőrzik a HTTP-szerződést.
+**Kérésmezők:**
 
-## 8. Telepítési és konfigurációs előfeltételek
+| Mező | Típus / korlátozás | Funkció |
+|---|---|---|
+| `input_data` | tetszőleges JSON-objektum, opcionális | Közvetlen promptbemenet. |
+| `message` | sztring, opcionális | Előfeldolgozott ügyfélüzenet. |
+| `bank` | `OTP` vagy `Raiffeisen`; alapértelmezés: `OTP` | A retrievalhez használt, bankonként elkülönített szabálykészlet kiválasztása. |
+| `facts` | sztringlistákat tartalmazó objektum, opcionális | `message` esetén felülírja a kinyert tényeket. |
+| `category` | megengedett kategória, opcionális | `message` esetén felülírja a besorolást. |
+| `rule_decision` | sztring, opcionális | `ruleDecision` promptmező; a szolgáltatás nem értékeli ki. |
+| `rule_reason` | sztring, opcionális | `ruleReason` promptmező. |
+| `matched_rules` | sztringlista, alapértelmezés: `[]` | `matchedRules` promptmező. |
+| `retrieval_top_k` | pozitív egész vagy `null` | Kérésenkénti találatszám-felülírás. |
+| `retrieval_min_similarity` | 0 és 1 közötti szám vagy `null` | Kérésenkénti hasonlóságküszöb. |
+| `prompt_name` | nem üres sztring vagy `null` | Promptazonosító; alapértelmezés a konfigurált prompt. |
+| `model_name` | nem üres sztring vagy `null` | Modellkulcs; alapértelmezés a konfigurált modell. |
+| `model_parameters` | objektum vagy `null` | Generálási paraméter-felülírások: `max_new_tokens`, `do_sample`, `temperature`, `top_p`. |
+| `reference_answer` | nem üres sztring vagy `null` | Opcionális token-F1 összehasonlításhoz; nem kerül a promptba. |
 
-- A függőségek a gyökérkönyvtár `requirements.txt` fájljában vannak rögzítve.
-- A `prompts` könyvtár tartalmazza a működéshez szükséges `v1.1.txt` alapértelmezett promptot. Egyedi promptkönyvtár a `PROMPT_DIR` változóval adható meg; a könyvtárnak legalább egy nem üres `.txt` fájlt kell tartalmaznia. A fájlnév kiterjesztés nélküli része a prompt azonosítója.
-- Az alkalmazás létrehozásakor a promptkönyvtár beolvasásra kerül, és a konfigurált alapértelmezett promptot ellenőrzi. Hiányzó prompt-konfiguráció esetén az alkalmazás elindul, de a generálási szolgáltatás nem elérhető, és a `/generate` `503` hibát ad.
-- A nyelvi modellek konfigurációja:
+Legalább a `message` vagy az `input_data` szükséges. A kérés ismeretlen legfelső szintű mezője validációs hibát ad. A `model_parameters` objektum ismeretlen paramétere a szolgáltatási validáció során `400 MODEL_PARAMETERS_INVALID` hibát ad.
 
-| Környezeti változó | Alapértelmezett modellazonosító |
+**Sikeres válaszmezők:**
+
+- `success: true`, `response`: nem üres, ügyfélnek szánt szöveg;
+- `prompt_version`, `model_name`, `model_id` és a tényleges `model_parameters`;
+- `reference_similarity` és `reference_similarity_metric`, amelyek referencia nélkül `null` értékűek, referencia esetén a metrika `token_f1`;
+- `sources`: a retrieval forrástalálatai; retrieval nélkül üres lista.
+
+A token-F1 a kis-/nagybetűtől független, NFKC-normalizált szavak multihalmazának átfedését méri 0–1 között. Lexikai hasonlóság, nem ténybeli vagy jogi helyességi mérőszám.
+
+**Jelentősebb hibák:**
+
+| HTTP | Hibakód | Feltétel |
+|---|---|---|
+| `400` | `GENERATION_INPUT_INVALID` | Üres/whitespace üzenet vagy hibás promptbemenet. |
+| `400` | `MODEL_NOT_SUPPORTED` | Ismeretlen modellkulcs. |
+| `400` | `MODEL_PARAMETERS_INVALID` | Nem támogatott vagy érvénytelen generálási paraméter. |
+| `404` | `PROMPT_VERSION_NOT_FOUND` | A kért prompt nincs betöltve. |
+| `422` | `VALIDATION_ERROR` | Kérésmező- vagy típushiba. |
+| `503` | `GENERATION_UNAVAILABLE` | Generálási szolgáltatás nincs konfigurálva. |
+| `503` | `PREPROCESSING_UNAVAILABLE` / `PREPROCESSING_INCOMPLETE` | `message` alapú generálásnál nincs pipeline, vagy az előfeldolgozás nem teljes. |
+| `503` | `RETRIEVAL_UNAVAILABLE` | A retrieval hibás vagy nem érhető el. |
+| `503` | `LLM_UNAVAILABLE` | A modell nem tudta kiszolgálni a kérést, vagy az eredménye nem fogadható el ügyfélválaszként. |
+| `504` | `PREPROCESSING_TIMEOUT`, `RETRIEVAL_TIMEOUT` vagy `GENERATION_TIMEOUT` | Az adott művelet `TimeoutError`-ral állt le. |
+| `500` | `INTERNAL_SERVER_ERROR` | Nem várt belső hiba. |
+
+Az összes API-hibaválasz alakja: `{"success":false,"error":{"code":string,"message":string,"correlation_id":string,"details"?: [...]}}`. A `422` válasz `details` mezője a mezőútvonalat és a validációs kódot tartalmazza, nem a beküldött mezőértéket.
+
+## 5. Modell- és külső szolgáltatásintegrációk
+
+### 5.1 Előfeldolgozó modellek
+
+- **NER:** `NYTK/named-entity-recognition-nerkor-hubert-hungarian`, Hugging Face Transformers `ner` pipeline, `aggregation_strategy="simple"`. A modell/tokenizáló első entitáskinyeréskor, lustán töltődik be.
+- **Zero-shot osztályozó:** `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`, Transformers `zero-shot-classification` pipeline. Csak akkor töltődik be, ha a magyar szabályok egyike sem illeszkedik. A modellpontszám alsó küszöbe `0.7`.
+- A modellek eléréséhez szükséges csomagokat, modellletöltést, cache-t és futtatási erőforrásokat a környezetnek kell biztosítania. A modellhibák az önálló preprocessing API-ban részleges eredményt okozhatnak.
+
+### 5.2 Generatív modellek
+
+Az LLM-modellek közös `HuggingFaceChatModel` adaptert használnak. A Hugging Face `AutoTokenizer` és `AutoModelForCausalLM` betöltése az első generáláskor történik; a tokenizer chat template-jével készül az egyfelhasználós üzenet, a modell `generate` hívása `torch.inference_mode()` alatt fut. A válasz a bemeneti tokenek utáni kimenetből dekódolódik.
+
+| API-modellkulcs | Alapértelmezett Hugging Face modellazonosító |
 |---|---|
-| `DEFAULT_LLM_MODEL` | `qwen2.5-0.5b-instruct` |
-| `QWEN2_5_MODEL_NAME` vagy másodlagosan `QWEN_MODEL_NAME` | `Qwen/Qwen2.5-0.5B-Instruct` |
-| `QWEN2_MODEL_NAME` | `Qwen/Qwen2-0.5B-Instruct` |
-| `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
-| `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct` |
+| `qwen2.5-0.5b-instruct` | `Qwen/Qwen2.5-0.5B-Instruct` |
+| `qwen2-0.5b-instruct` | `Qwen/Qwen2-0.5B-Instruct` |
+| `llama-tiny-1.1b-chat` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
+| `llama-3.2-1b-instruct` | `meta-llama/Llama-3.2-1B-Instruct` |
 
-- A besorolás nem igényel saját tanítóadatot vagy tanítási folyamatot: előre betanított zero-shot modellt és szabályalapú eseteket használ. A NER és zero-shot modellek első használatkor töltenek be; hálózat/cache vagy modellhiba esetén a preprocessing válasza `partial_success: true` és `warnings` mezőkkel jelzi a kiesett lépést. A szabályokkal felismert besorolások nem igénylik a zero-shot modellt.
-- A zero-shot `MessageClassifier` alapértelmezett modellje `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`, a `ZERO_SHOT_CLASSIFIER_MODEL` változóval felülírható. A magyar panaszokon elért pontosság nincs validálva.
+A modellkulcsot kell a `model_name` mezőben megadni, nem a Hugging Face azonosítót. Alapértelmezett modell a `qwen2.5-0.5b-instruct`. A beállítások induláskor ellenőrződnek. Alapértékük `max_new_tokens=512`, `do_sample=false`, `temperature=1.0`, `top_p=1.0`. A temperature és a top-p csak bekapcsolt mintavételezéskor kerül a modellnek átadott paraméterek közé.
 
-## 9. Ismert hiányosságok és nyitott kérdések
+### 5.3 Beágyazás és vektortár
 
-1. A zero-shot classifier magyar panaszokon mért pontossága, elfogadási küszöbe és kategórialeírásainak minősége nincs meghatározva.
-2. Az anonimizáló mintázatok pontossági és teljességi követelményei, valamint az anonimizálás utáni adatkezelés szabályai nincsenek rögzítve.
-3. Nincs meghatározva a válaszminőség mérési módja, elfogadási küszöbe vagy jogi megfelelőségi ellenőrzése.
-4. Nincsenek rögzítve telepítési, megfigyelhetőségi, naplózási, adatmegőrzési, SLA- és terhelési célok.
-5. A lokális modellbetöltés és inferencia megszakítására nincs külön timeout-mechanizmus.
+- **Beágyazó modell:** alapértelmezés szerint `intfloat/multilingual-e5-small`. A dokumentumok `passage: `, a keresési lekérdezések `query: ` prefixet kapnak. A modell tokenizált kimenetéből attention-maskolt mean pooling, majd L2-normalizálás készül.
+- **Vektortár:** tartós ChromaDB `PersistentClient`, alapértelmezett gyűjteménynév `reference_documents`, cosine távolságmetrikával. Az alapértelmezett könyvtár `~/.comply-flow/vector_store`.
+- A beágyazó modell szintén lustán töltődik be. A vektortár életciklusának lezárásakor az alkalmazás bezárja a klienst.
+- **Dokumentumforrások:** BOM alapján UTF-16/UTF-8, ennek hiányában UTF-8, majd CP1250 kódolással olvashatók.
+- **Bankonkénti fájlkészletek:** OTP esetén `OTP-Uzletszabalyzat.txt`, `2012. évi CXVI. törvény a pénzügyi.txt`, `OTP-HIRDETMÉNY.txt`; Raiffeisen esetén `2012. évi CXVI. törvény a pénzügyi.txt`, `HIRDETENY-Raiffeisen.txt`, `Lakossagi-uzletszabalyzat-Raiffeisen.txt`. Alapértelmezett könyvtáruk `~/OTP` és `~/Raiffeisen`; az `OTP_RULES_DIR` és `RAIFFEISEN_RULES_DIR` változókkal külön-külön felülírhatók. A régi `REFERENCE_DOCUMENTS_DIR` változó továbbra is az OTP könyvtár felülírásaként használható.
+- **Darabolás:** az alapértelmezett részletméret 2400 karakter, az átfedés 300 karakter. A daraboló előnyben részesíti a bekezdés-, mondat- és szóhatárokat, a találatok forrás-karakterpozíciót és dokumentumon belüli indexet kapnak.
+- **Indexelés:** a `DocumentIndexer` a dokumentumokat feldarabolja, beágyazza, majd dokumentumonként lecseréli a vektortárban szereplő részleteket; az elavult részleteket törli. A CLI az eredményül indexelt dokumentum- és darabszámot kiírja.
 
-## 10. Követelmény-elfogadási alap
+## 6. Adatok és konfiguráció
 
-A jelenlegi állapot akkor tekinthető a dokumentumnak megfelelőnek, ha:
+### 6.1 Kategóriaértékek
 
-- a `/health` a megadott állapotobjektumot adja;
-- a `/models` visszaadja a konfigurált modellazonosítókat és az alapértelmezett modellt;
-- egy érvényes, létező promptot és elérhető modellt használó `/generate` kérés nem üres szöveget ad vissza;
-- az előfeldolgozás eredménye a leírt válaszsémát követi, ha az összes szükséges komponenst konfigurálták;
-- a fent dokumentált hiányzó konfigurációk és nem implementált biztonsági, minőségi, teljesítmény- és üzemeltetési célok nem kerülnek kész képességként feltüntetésre.
+Az előfeldolgozási kategória literáljai:
+
+`TRANSACTION_TAX`, `SAVINGS_ACCOUNT_INTEREST`, `SAVINGS_ACCOUNT_TERMS`, `BANK_TRANSFER_FEES`, `SAVINGS_ACCOUNT_FEES`, `BANKING`, `REFUND`, `DEFECTIVE_PRODUCT`, `DELIVERY`, `WARRANTY`, `CANCELLATION`, `GENERAL_COMPLAINT`, `OTHER`.
+
+### 6.2 Környezeti változók
+
+| Változó | Alapérték / funkció |
+|---|---|
+| `PROMPT_DIR` | Repository `prompts` könyvtára; a prompt `.txt` fájlok helye. |
+| `DEFAULT_PROMPT_NAME` | `v1.1`; alapértelmezett promptazonosító. |
+| `DEFAULT_LLM_MODEL` | `qwen2.5-0.5b-instruct`; alapértelmezett API-modellkulcs. |
+| `QWEN2_5_MODEL_NAME` | `Qwen/Qwen2.5-0.5B-Instruct`; ha nincs megadva, `QWEN_MODEL_NAME` is használható. |
+| `QWEN2_MODEL_NAME` | `Qwen/Qwen2-0.5B-Instruct`. |
+| `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0`. |
+| `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct`. |
+| `LLM_MAX_NEW_TOKENS`, `LLM_DO_SAMPLE`, `LLM_TEMPERATURE`, `LLM_TOP_P` | Közös generálási alapértékek; rendre `512`, `false`, `1.0`, `1.0`. |
+| `QWEN2_5_*`, `QWEN2_*`, `LLAMA_TINY_*`, `LLAMA3_2_*` | Modellcsaládonként felülírható generálási változók: `_MAX_NEW_TOKENS`, `_DO_SAMPLE`, `_TEMPERATURE`, `_TOP_P`. |
+| `ZERO_SHOT_CLASSIFIER_MODEL` | `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. |
+| `RETRIEVAL_ENABLED` | `false`; retrieval bekapcsolása. |
+| `REFERENCE_DOCUMENTS_DIR` | Régi, OTP-re vonatkozó könyvtárbeállítás; elsődlegesen az `OTP_RULES_DIR` használandó. |
+| `OTP_RULES_DIR` | OTP szabályfájlok könyvtára; alapértelmezés `~/OTP`. |
+| `RAIFFEISEN_RULES_DIR` | Raiffeisen szabályfájlok könyvtára; alapértelmezés `~/Raiffeisen`. |
+| `EMBEDDING_MODEL_NAME` | `intfloat/multilingual-e5-small`. |
+| `RETRIEVAL_TOP_K` | `5`; alapértelmezett keresési találatszám. |
+| `RETRIEVAL_MIN_SIMILARITY` | `0.7`; alapértelmezett hasonlósági küszöb. |
+| `VECTOR_STORE_DIR` | ChromaDB gyökérkönyvtára; OTP index közvetlenül itt, Raiffeisen index a `raiffeisen` alkönyvtárban van. Alapértelmezés `~/.comply-flow/vector_store`. |
+| `REQUEST_LOG_FILE` | `logs/requests.jsonl`; relatív érték a repository gyökérkönyvtárához viszonyul. |
+
+A promptkönyvtárnak léteznie kell, legalább egy nem üres `.txt` fájlt kell tartalmaznia, és a beállított alapértelmezett promptnak is léteznie kell. Ha a prompt-konfiguráció betöltése hibázik, az alkalmazás ettől még elindulhat, de a generálási szolgáltatás nem konfigurált. Hiányzó vagy hibás szabályfájl esetén a külön indexelő parancs hibával leáll; az API nem tölti be automatikusan a forrásfájlokat. A retrieval bekapcsolása külön vektortárat és modellfüggőségeket igényel.
+
+### 6.3 Adattárolás és naplózás
+
+Az alkalmazás nem tárol ügyfélügyeket vagy generálási eredményeket adatbázisban. A ChromaDB tartósan referencia-dokumentumrészleteket és beágyazásokat tárol.
+
+A korrelációs naplózás a kérés kezdetét/befejezését és a hibakódokat rögzíti. Emellett a `RequestFileLoggingMiddleware` alapértelmezés szerint JSONL-fájlba írja a HTTP-kérések törzsét is (`request_body`), a metódussal, útvonallal, query stringgel, státusszal és korrelációs azonosítóval együtt; választestet nem ír. Ezért a nyers, még anonimizálatlan ügyfélüzenet is bekerülhet a kérésnaplóba. A fájl elérési útja `REQUEST_LOG_FILE` változóval állítható, és a napló megőrzését, hozzáférését, törlését, illetve adatvédelmi kezelését az üzemeltetőnek kell meghatároznia.
+
+## 7. Nem funkcionális korlátok és nyitott kérdések
+
+- A hitelesítés, jogosultságkezelés, rate limiting, SLA, válaszidő- és terhelési célérték nincs implementálva vagy meghatározva.
+- A `/health` nem függőség-ellenőrző readiness/liveness vizsgálat.
+- A személyes adatokat felismerő reguláris kifejezések nem teljes körűek; a request-fájl napló a nyers kérést is tárolja.
+- A modellminőség, magyar kategorizálási pontosság, válaszok tényszerűsége és jogi megfelelősége nincs elfogadási adatkészlettel igazolva.
+- A generáláshoz, NER-hez, osztályozáshoz és beágyazáshoz nincs általános, konfigurált inference-timeout; a `504` csak észlelt `TimeoutError` esetén keletkezik.
+- A modellletöltés, tárhely-, CPU/GPU-igény és válaszidő a futtatási környezettől függ. A betöltés és következtetés helyi Hugging Face/Transformers-függőségre épül.
+- A retrieval találata nem bizonyítja, hogy a generált válasz helyes; a token-F1 pedig csak szöveges egyezést jelez.
+- A besorolás szabályai heurisztikusak és sorrendérzékenyek; a zero-shot modell küszöbe, címkéi és pontossága üzleti validációt igényel.
+
+## 8. Elfogadási alap
+
+A jelenlegi implementáció a specifikációnak megfelelő, ha:
+
+- a négy dokumentált HTTP-végpont a leírt szerződés és hibakezelés szerint működik;
+- az előfeldolgozás a tisztítási, anonimizálási, ténykinyerési, kategorizálási és részleges sikerre vonatkozó szabályokat alkalmazza;
+- `message` alapú generálás a teljes előfeldolgozási eredményt, a promptot, a kiválasztott LLM-et és – ha be van kapcsolva – a retrieval eredményeit használja;
+- a promptbemenet, modellparaméterek, válaszkimenet és opcionális token-F1 a fent leírt módon validálódik;
+- a konfigurálatlan vagy elérhetetlen függőségek a megfelelő hibával vagy előfeldolgozási figyelmeztetéssel jelennek meg;
+- a dokumentum nem állít nem létező szabálymotort, teljes körű anonimizálást, biztonsági funkciót, válaszminőséget vagy automatikus dokumentumindexelést.

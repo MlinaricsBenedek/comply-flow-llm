@@ -139,23 +139,20 @@ def create_app(
     if state_builder is None:
         state_builder = _create_default_state_builder()
 
-    configured_documents_dir = (
-        reference_documents_dir
-        if reference_documents_dir is not None
-        else os.getenv("REFERENCE_DOCUMENTS_DIR")
-    )
+    configured_documents_dir = reference_documents_dir
     if isinstance(configured_documents_dir, str) and not configured_documents_dir.strip():
-        raise ValueError("REFERENCE_DOCUMENTS_DIR must not be empty.")
-    try:
-        reference_documents = ReferenceDocumentLoader(
-            configured_documents_dir
-        ).load()
-    except (OSError, UnicodeError) as error:
-        logger.error(
-            "reference_documents_unavailable",
-            extra={"exception_type": type(error).__name__},
-        )
-        reference_documents = None
+        raise ValueError("reference_documents_dir must not be empty.")
+    reference_documents = None
+    if configured_documents_dir is not None:
+        try:
+            reference_documents = ReferenceDocumentLoader(
+                configured_documents_dir
+            ).load()
+        except (OSError, UnicodeError) as error:
+            logger.error(
+                "reference_documents_unavailable",
+                extra={"exception_type": type(error).__name__},
+            )
     reference_document_chunks = (
         DocumentChunker().chunk_documents(reference_documents)
         if reference_documents is not None
@@ -163,18 +160,25 @@ def create_app(
     )
     if retrieval_enabled is None:
         retrieval_enabled = _read_bool_setting("RETRIEVAL_ENABLED", False)
-    vector_store = None
+    vector_stores: dict[str, ChromaVectorStore] = {}
+    retrievers: dict[str, Retriever] = {}
     if retriever is None and retrieval_enabled:
-        vector_store = ChromaVectorStore()
-        retriever = Retriever.from_environment(
-            EmbeddingService(
-                model_name=os.getenv(
-                    "EMBEDDING_MODEL_NAME",
-                    "intfloat/multilingual-e5-small",
-                )
-            ),
-            vector_store,
+        embedding_service = EmbeddingService(
+            model_name=os.getenv(
+                "EMBEDDING_MODEL_NAME",
+                "intfloat/multilingual-e5-small",
+            )
         )
+        for bank in ("OTP", "Raiffeisen"):
+            bank_vector_store = ChromaVectorStore(bank=bank)
+            vector_stores[bank] = bank_vector_store
+            retrievers[bank] = Retriever.from_environment(
+                embedding_service,
+                bank_vector_store,
+            )
+        retriever = retrievers["OTP"]
+    elif retriever is not None:
+        retrievers["OTP"] = retriever
 
     if generation_service is None:
         generation_parameters = {
@@ -247,8 +251,8 @@ def create_app(
         try:
             yield
         finally:
-            if vector_store is not None:
-                vector_store.close()
+            for bank_vector_store in vector_stores.values():
+                bank_vector_store.close()
 
     application = FastAPI(
         title="Comply Flow AI Service",
@@ -362,7 +366,9 @@ def create_app(
     application.state.reference_documents = reference_documents
     application.state.reference_document_chunks = reference_document_chunks
     application.state.retriever = retriever
-    application.state.vector_store = vector_store
+    application.state.retrievers = retrievers
+    application.state.vector_stores = vector_stores
+    application.state.vector_store = vector_stores.get("OTP")
 
     application.include_router(generation_router)
     application.include_router(health_router)

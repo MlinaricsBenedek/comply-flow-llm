@@ -3,6 +3,7 @@ import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.services.document_chunker import DocumentChunk
@@ -135,9 +136,17 @@ class VectorStoreTests(unittest.TestCase):
         chromadb.Settings = lambda **kwargs: kwargs
         self.chromadb_module = chromadb
 
-    def create_store(self, path: str) -> ChromaVectorStore:
+    def create_store(self, path: str, bank: str = "OTP") -> ChromaVectorStore:
         with patch.dict(sys.modules, {"chromadb": self.chromadb_module}):
-            return ChromaVectorStore(path=path)
+            return ChromaVectorStore(path=path, bank=bank)
+
+    def test_bank_uses_separate_persistent_store_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            otp_store = self.create_store(directory)
+            raiffeisen_store = self.create_store(directory, bank="Raiffeisen")
+
+        self.assertEqual(otp_store.path, Path(directory))
+        self.assertEqual(raiffeisen_store.path, Path(directory, "raiffeisen"))
 
     def test_upserts_chunks_with_source_metadata_and_cosine_collection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

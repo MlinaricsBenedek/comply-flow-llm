@@ -11,6 +11,7 @@
     "ruleReason": "A példa nem futtat szabálymotort.",
     "matchedRules": []
   },
+  "bank": "OTP",
   "prompt_name": "v1.1",
   "model_name": "qwen2.5-0.5b-instruct",
   "model_parameters": {

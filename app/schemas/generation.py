@@ -19,6 +19,7 @@ class GenerationRequest(BaseModel):
 
     input_data: dict[str, object] | None = None
     message: str | None = None
+    bank: Literal["OTP", "Raiffeisen"] = "OTP"
     facts: dict[str, list[str]] | None = None
     category: PreprocessingCategory | None = None
     rule_decision: str | None = None

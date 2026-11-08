@@ -12,6 +12,7 @@ from app.services.document_chunker import DocumentChunk
 
 DEFAULT_COLLECTION_NAME = "reference_documents"
 DEFAULT_VECTOR_STORE_PATH = Path.home() / ".comply-flow" / "vector_store"
+SUPPORTED_BANKS = ("OTP", "Raiffeisen")
 
 
 @dataclass(frozen=True)
@@ -57,12 +58,17 @@ class ChromaVectorStore:
         self,
         path: str | Path | None = None,
         collection_name: str = DEFAULT_COLLECTION_NAME,
+        bank: str = "OTP",
     ) -> None:
         if not collection_name.strip():
             raise ValueError("collection_name must not be empty.")
+        if bank not in SUPPORTED_BANKS:
+            raise ValueError(f"Unsupported bank: {bank}")
 
         configured_path = path if path is not None else os.getenv("VECTOR_STORE_DIR")
-        self.path = Path(configured_path) if configured_path else DEFAULT_VECTOR_STORE_PATH
+        base_path = Path(configured_path) if configured_path else DEFAULT_VECTOR_STORE_PATH
+        self.path = base_path if bank == "OTP" else base_path / "raiffeisen"
+        self.bank = bank
 
         import chromadb
 
