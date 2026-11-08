@@ -56,13 +56,14 @@ class FakeModel:
         self.failure = failure
         self.prompt = None
         self.parameters = None
+        self.response = "Generated reply"
 
     def generate(self, prompt: str, **parameters: int | float | bool) -> str:
         self.prompt = prompt
         self.parameters = parameters
         if self.failure is not None:
             raise self.failure
-        return "Generated reply"
+        return self.response
 
 
 class FakeStateBuilder:
@@ -572,10 +573,6 @@ class APIWorkflowTests(unittest.TestCase):
             "ruleDecision": "not_evaluated",
             "ruleReason": "No rule-engine decision is available.",
             "matchedRules": [],
-            "responsePlan": {
-                "tone": "professional",
-                "language": "Hungarian",
-            },
             "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
         }
         dotnet_context = expected_context.copy()
@@ -600,7 +597,6 @@ class APIWorkflowTests(unittest.TestCase):
                 "ruleDecision",
                 "ruleReason",
                 "matchedRules",
-                "responsePlan",
                 "retrievedContext",
             },
         )
@@ -613,6 +609,8 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertNotRegex(dotnet_rendered, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
         self.assertIn("A termék meghibásodott.", python_rendered)
         self.assertIn("ASUS TUF A16 laptop", dotnet_rendered)
+        self.assertNotIn('"tone"', python_rendered)
+        self.assertNotIn('"tone"', dotnet_rendered)
 
     def test_generate_retrieves_sources_and_passes_them_to_prompt_and_response(self) -> None:
         class FakeRetriever:
@@ -673,8 +671,8 @@ class APIWorkflowTests(unittest.TestCase):
             },
         )
         self.assertIn("A díj mértéke az aktuális hirdetmény szerint.", self.model.prompt)
-        self.assertIn("OTP-HIRDETMÉNY.txt#chunk-3", self.model.prompt)
-        self.assertIn("OTP-HIRDETMÉNY.txt", self.model.prompt)
+        self.assertNotIn("OTP-HIRDETMÉNY.txt#chunk-3", self.model.prompt)
+        self.assertNotIn("OTP-HIRDETMÉNY.txt", self.model.prompt)
         self.assertEqual(
             response.json()["sources"][0]["document_name"],
             "OTP-HIRDETMÉNY.txt",
@@ -709,10 +707,10 @@ class APIWorkflowTests(unittest.TestCase):
         ]
         context = GenerationService.format_retrieved_context(conflicting_sources)
 
-        self.assertIn("policy.txt#chunk-1", context)
-        self.assertIn("notice.txt#chunk-2", context)
         self.assertIn("A díj 1 000 Ft.", context)
         self.assertIn("A díj 1 500 Ft.", context)
+        self.assertNotIn("source_id", context)
+        self.assertNotIn('"text"', context)
         self.assertIn("ellentmondanak", PromptService(prompt_dir=DEFAULT_PROMPT_DIR).get_prompt("v1.1"))
 
     def test_generate_without_relevant_sources_passes_explicit_empty_context(self) -> None:
@@ -810,6 +808,7 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("A laptop elromlott.", self.model.prompt)
         self.assertIn("ASUS TUF A16 laptop", self.model.prompt)
         self.assertIn("A hiba alapján további egyeztetés szükséges.", self.model.prompt)
+        self.assertNotIn('"tone"', self.model.prompt)
         self.assertNotRegex(self.model.prompt, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
 
     def test_generate_preprocesses_message_before_rendering_prompt(self) -> None:
@@ -1075,6 +1074,73 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
         self.assertNotIn("private model cache path", response.text)
+
+    def test_generation_rejects_internal_prompt_content_in_model_response(self) -> None:
+        self.model.response = (
+            '### Döntési javaslat\n{"tone": "professional", '
+            '"language": "Hungarian"}\n### Visszakeresett dokumentumkontextus'
+        )
+
+        response = self.request("POST", "/generate", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertNotIn("Döntési javaslat", response.text)
+        self.assertNotIn('"tone"', response.text)
+
+    def test_generation_rejects_extracted_facts_json_in_model_response(self) -> None:
+        self.model.response = (
+            '{"price": ["100 000 Ft", "1 200 Ft", "713 Ft"], '
+            '"organization": ["OTP"], "miscellaneous": ["OTP InternetBank"]}'
+        )
+
+        response = self.request("POST", "/generate", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertNotIn('"price"', response.text)
+
+    def test_generation_rejects_extracted_facts_markdown_table(self) -> None:
+        self.model.response = (
+            "### Panasz díj jogos\n\n"
+            "| Price | Organization | Misc |\n"
+            "|---|---|---|\n"
+            "| 1 200 Ft | OTP InternetBank | OTP |"
+        )
+
+        response = self.request("POST", "/generate", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertNotIn("Price", response.text)
+
+    def test_generation_rejects_complaint_verdict_when_rule_not_evaluated(self) -> None:
+        self.model.response = "A panasz jogos."
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "not_evaluated_as"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertNotIn("jogos", response.text)
+
+    def test_generation_allows_uncertain_answer_when_rule_not_evaluated(self) -> None:
+        self.model.response = (
+            "A rendelkezésre álló adatokból nem állapítható meg, hogy a díj "
+            "jogos-e; ehhez a tranzakció részleteit ellenőrizni kell."
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "not_evaluated"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("nem állapítható meg", response.json()["response"])
 
     def test_unexpected_generation_failure_returns_sanitized_500(self) -> None:
         self.generation_service.generate_result = lambda *args, **kwargs: (_ for _ in ()).throw(

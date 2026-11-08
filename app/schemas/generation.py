@@ -72,10 +72,6 @@ class GenerationRequest(BaseModel):
                 "ruleReason": self.rule_reason
                 or "No rule-engine decision is available.",
                 "matchedRules": self.matched_rules,
-                "responsePlan": {
-                    "tone": "professional",
-                    "language": "Hungarian",
-                },
                 "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
             }
         if self.input_data is None:

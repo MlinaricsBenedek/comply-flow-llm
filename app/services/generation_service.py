@@ -26,6 +26,28 @@ class ModelGenerationError(RuntimeError):
 class GenerationService:
     _placeholder_pattern = re.compile(r"{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}")
     _word_pattern = re.compile(r"\w+", re.UNICODE)
+    _internal_heading_pattern = re.compile(
+        r"^\s*(?:#{1,6}\s*)?(?:döntési javaslat|a döntés indoka|"
+        r"alkalmazott szabályok|választerv|visszakeresett dokumentumkontextus)"
+        r"(?:\s*:|[ \t]*$)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    _response_plan_json_pattern = re.compile(
+        r"""["'](?:tone|language)["']\s*:""",
+        re.IGNORECASE,
+    )
+    _table_pattern = re.compile(r"(?m)^.*\|.*\|.*$")
+    _extracted_field_pattern = re.compile(
+        r"(?im)^\s*(?:price|organization|misc(?:ellaneous)?|"
+        r"ár|összeg|szervezet|egyéb)\s*[:|]"
+    )
+    _complaint_verdict_pattern = re.compile(
+        r"\b(?:a\s+)?(?:panasz\w*|díj\w*|terhelés\w*)\s+"
+        r"(?:nem\s+)?jog(?:os|talan)\w*(?!-e\b)\b|"
+        r"\bjog(?:os|talan)\w*(?!-e\b)\s+(?:a|az)\s+"
+        r"(?:panasz\w*|díj\w*|terhelés\w*)\b",
+        re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -54,19 +76,11 @@ class GenerationService:
         if not sources:
             return "Nincs kellően releváns dokumentumrészlet."
 
-        context = [
-            {
-                "source_id": source.source_id,
-                "document_name": source.document_name,
-                "chunk_index": source.chunk_index,
-                "start_char": source.start_char,
-                "end_char": source.end_char,
-                "similarity": source.similarity,
-                "text": source.text,
-            }
+        return "\n\n".join(
+            f"{source.text.strip()}"
             for source in sources
-        ]
-        return json.dumps(context, ensure_ascii=False, indent=2)
+            if source.text.strip()
+        ) or "Nincs kellően releváns dokumentumrészlet."
 
     def generate(
         self,
@@ -100,8 +114,16 @@ class GenerationService:
         if not isinstance(response, str) or not response.strip():
             raise ModelGenerationError("The language model returned an empty response.")
 
+        response = response.strip()
+        if self._contains_internal_prompt_content(response) or (
+            self._contains_unsupported_decision(response, input_data)
+        ):
+            raise ModelGenerationError(
+                "The language model returned a non-customer-facing or unsupported response."
+            )
+
         return GenerationResult(
-            response=response.strip(),
+            response=response,
             prompt_version=selected_prompt_name,
             model_name=model_configuration.model_name,
             model_id=model_configuration.model_id,
@@ -126,3 +148,50 @@ class GenerationService:
             return str(value)
 
         return self._placeholder_pattern.sub(replace_placeholder, template)
+
+    @classmethod
+    def _contains_internal_prompt_content(cls, response: str) -> bool:
+        if (
+            cls._internal_heading_pattern.search(response)
+            or cls._response_plan_json_pattern.search(response)
+            or cls._table_pattern.search(response)
+            or cls._extracted_field_pattern.search(response)
+        ):
+            return True
+
+        candidates = [response.strip()]
+        candidates.extend(
+            match.group(1).strip()
+            for match in re.finditer(
+                r"```(?:json)?\s*(.*?)\s*```",
+                response,
+                re.IGNORECASE | re.DOTALL,
+            )
+        )
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, (dict, list)):
+                return True
+        return False
+
+    @classmethod
+    def _contains_unsupported_decision(
+        cls,
+        response: str,
+        input_data: Mapping[str, object],
+    ) -> bool:
+        decision = input_data.get("ruleDecision")
+        if not isinstance(decision, str):
+            return False
+        normalized_decision = normalize("NFKC", decision).casefold().replace("-", "_")
+        if normalized_decision not in {
+            "not_evaluated",
+            "not evaluated",
+            "not_evaluated_as",
+            "not evaluated as",
+        }:
+            return False
+        return bool(cls._complaint_verdict_pattern.search(response))

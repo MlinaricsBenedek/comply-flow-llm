@@ -52,12 +52,12 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | FR-05 | Az előfeldolgozó pipeline-nek entitásokat kell kinyernie, majd kategóriát kell rendelnie az üzenethez. | A default `StateBuilder` a magyar NER-Kor/HuBERT entitáskinyerőt használja; a `PER`, `LOC`, `ORG` címkéket `PERSON`, `LOCATION`, `ORGANIZATION` kulcsokra képezi le. Egy helyi próba megmutatta, hogy az entitáshatárok (például a névragok) hibásak lehetnek. A besorolás egyértelmű esetekben magyar szabályokat, máskülönben többnyelvű NLI zero-shot modellt használ; 0,7 alatti modellpontszámnál `OTHER` az eredmény. Modellhiba esetén részleges eredményt és figyelmeztetést ad. A magyar kategóriapontosság reprezentatív adatkészleten nincs validálva. |
 | FR-06 | Üres vagy whitespace-re redukálódó üzenet esetén a pipeline üres üzenetet, üres ténylistát és `null` kategóriát adjon vissza. | A `StateBuilder` szintjén megvalósítva. |
 | FR-07 | A `POST /generate` kérés `input_data` objektumot vagy `message` mezőt fogadhat. | Megvalósítva. Ha mindkettő szerepel, a `message` alapján létrehozott bemenet az irányadó. |
-| FR-08 | `message` használatakor a rendszer a szöveget ügyfélüzenetként adja át, alapértelmezett `OTHER` kategóriával, üres tényekkel, `provide_information` döntéssel, valamint professzionális magyar választervvel. | Megvalósítva a kérésmodellben. |
+| FR-08 | `message` használatakor a rendszer a szöveget ügyfélüzenetként adja át az előfeldolgozás eredményével és a rendelkezésre álló szabálykontextussal; belső választerv-JSON nem kerül a promptba. | Megvalósítva; a prompt írja elő a rövid, udvarias magyar választ. |
 | FR-09 | A generálásnak a megadott promptot, vagy ennek hiányában a `v1.1` promptot kell használnia. | Megvalósítva; a promptnak betöltött `.txt` fájlként léteznie kell. |
-| FR-10 | A prompt `{{kulcs}}` változóit a bemeneti adatok megfelelő értékeivel kell helyettesíteni; hiányzó kulcs esetén hibát kell jelezni. | Megvalósítva. Lista-, tuple- és szótárértékek JSON-ként kerülnek beillesztésre. |
+| FR-10 | A prompt `{{kulcs}}` változóit a bemeneti adatok megfelelő értékeivel kell helyettesíteni; hiányzó kulcs esetén hibát kell jelezni. | Megvalósítva. Általános lista-, tuple- és szótárértékek JSON-ként kerülnek beillesztésre; a retrieval szövege egyszerű szövegként szerepel. |
 | FR-11 | A kliens megadhatja a használni kívánt modellt, vagy elhagyhatja azt az alapértelmezett modell használatához. | Megvalósítva. |
 | FR-12 | A `GET /models` végpontnak fel kell sorolnia a konfigurált modelleket és jeleznie kell az alapértelmezettet. | Megvalósítva. |
-| FR-13 | A generálásnak nem üres szöveges választ kell visszaadnia. | Üres modellválasz esetén a rendszer hibát jelez. |
+| FR-13 | A generálásnak nem üres, ügyfélnek szánt szöveges választ kell visszaadnia, belső promptcímkék, ténykinyerési JSON vagy táblázat nélkül. | Üres, belső formátumú választ, illetve `not_evaluated` mellett jogos/jogtalan döntést visszaadó modellválasz esetén a rendszer hibát jelez, nem adja vissza ügyfélválaszként. |
 | FR-14 | A `POST /generate` opcionális referencia-válasszal számítson token-szintű egyezési pontszámot. | Megvalósítva kis-/nagybetűtől független token-F1-ként; ez lexikai hasonlóság, nem tényszerű pontosság. Referencia nélkül a pontszám és a metrika neve `null`. |
 
 ## 5. Külső interfészek
@@ -69,7 +69,7 @@ Az alábbi követelmények a jelenlegi implementáció viselkedését rögzítik
 | `GET /health` | Nincs | `{"status":"ok"}` | A kódban nincs külön függőségi állapotvizsgálat. |
 | `POST /preprocessing` | `{"message": string}` | Egységes `PreprocessingResponse`: `success`, `message`, `facts`, `category`, `partial_success`, `warnings`, `warning_details` | `422` sémahiba; `503` hiányzó pipeline/modell; `504` tényleges `TimeoutError`; `500` feldolgozási hiba. |
 | `GET /models` | Nincs | `{"success": true, "models":[{"name": string, "is_default": boolean}]}` | `503`, ha az LLM szolgáltatás nincs konfigurálva. |
-| `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters`, `reference_answer` | `success`, `response`, prompt- és modellmetaadatok, valamint `reference_similarity` és `reference_similarity_metric` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba; `504` tényleges timeout; `500` nem várt hiba. |
+| `POST /generate` | `input_data` és/vagy `message`; opcionálisan `facts`, `category`, `prompt_name`, `model_name`, `model_parameters`, `reference_answer` | `success`, `response`, prompt- és modellmetaadatok, valamint `reference_similarity` és `reference_similarity_metric` | `400` érvénytelen bemenet/modell/paraméter; `404` hiányzó prompt; `422` request-validáció; `503` modellhiba vagy belső prompttartalmat visszaadó kimenet; `504` tényleges timeout; `500` nem várt hiba. |
 
 A FastAPI alapértelmezett OpenAPI és Swagger UI felülete nincs kikapcsolva.
 
@@ -78,7 +78,7 @@ Hibaválasz minden végponton egységes formátumú: `{"success": false, "error"
 ### 5.2 Generálási kérés részletei
 
 - Az `input_data` általános JSON-objektumként adható át.
-- A `message` alternatív, egyszerű bemenet. Használatakor a rendszer a `cleanedText`, `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan` kulcsokat állítja elő.
+- A `message` alternatív, egyszerű bemenet. Használatakor a rendszer a `cleanedText`, `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason` és `matchedRules` kulcsokat állítja elő; a belső `responsePlan` JSON-t nem adja át a modellnek.
 - Legalább `input_data` vagy `message` szükséges; ha mindkettő szerepel, a `message` az irányadó. A kérés és sikeres válasz az OpenAPI-ban `GenerationRequest` és `GenerationResponse` sémával szerepel.
 - A `facts`, `category`, `prompt_name`, `model_name` és opcionális `model_parameters` közvetlenül a `message` alapú bemenet létrehozásakor használható.
 - A `reference_answer` opcionális elvárt válasz; csak az értékeléshez használjuk, a modell promptjába nem kerül be. A válasz token-F1 pontszáma 0 és 1 közé esik, és lexikai egyezést mér, nem tényszerű helyességet.

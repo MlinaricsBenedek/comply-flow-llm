@@ -9,11 +9,7 @@
     },
     "ruleDecision": "not_evaluated",
     "ruleReason": "A példa nem futtat szabálymotort.",
-    "matchedRules": [],
-    "responsePlan": {
-      "tone": "professional",
-      "language": "Hungarian"
-    }
+    "matchedRules": []
   },
   "prompt_name": "v1.1",
   "model_name": "qwen2.5-0.5b-instruct",
