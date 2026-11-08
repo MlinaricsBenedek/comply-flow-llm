@@ -1,12 +1,13 @@
 import json
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from unicodedata import normalize
 
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
+from app.services.retriever import RetrievedSource
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,25 @@ class GenerationService:
 
         overlap = sum((Counter(response_tokens) & Counter(reference_tokens)).values())
         return round(2 * overlap / (len(response_tokens) + len(reference_tokens)), 4)
+
+    @staticmethod
+    def format_retrieved_context(sources: Sequence[RetrievedSource]) -> str:
+        if not sources:
+            return "Nincs kellően releváns dokumentumrészlet."
+
+        context = [
+            {
+                "source_id": source.source_id,
+                "document_name": source.document_name,
+                "chunk_index": source.chunk_index,
+                "start_char": source.start_char,
+                "end_char": source.end_char,
+                "similarity": source.similarity,
+                "text": source.text,
+            }
+            for source in sources
+        ]
+        return json.dumps(context, ensure_ascii=False, indent=2)
 
     def generate(
         self,

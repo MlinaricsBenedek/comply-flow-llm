@@ -76,7 +76,7 @@ class GenerationRequest(BaseModel):
                     "tone": "professional",
                     "language": "Hungarian",
                 },
-                "retrievedSources": [],
+                "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
             }
         if self.input_data is None:
             raise ValueError("Either input_data or message must be provided.")
@@ -85,6 +85,7 @@ class GenerationRequest(BaseModel):
 
 
 class RetrievedSourceResponse(BaseModel):
+    source_id: str
     document_name: str
     chunk_index: int = Field(ge=0)
     text: str

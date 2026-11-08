@@ -534,7 +534,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "tone": "professional",
                 "language": "Hungarian",
             },
-            "retrievedSources": [],
+            "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
         }
         dotnet_context = expected_context.copy()
         python_context = GenerationRequest(
@@ -559,7 +559,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "ruleReason",
                 "matchedRules",
                 "responsePlan",
-                "retrievedSources",
+                "retrievedContext",
             },
         )
         self.assertLessEqual(prompt_variables, set(python_context))
@@ -631,12 +631,72 @@ class APIWorkflowTests(unittest.TestCase):
             },
         )
         self.assertIn("A díj mértéke az aktuális hirdetmény szerint.", self.model.prompt)
+        self.assertIn("OTP-HIRDETMÉNY.txt#chunk-3", self.model.prompt)
         self.assertIn("OTP-HIRDETMÉNY.txt", self.model.prompt)
         self.assertEqual(
             response.json()["sources"][0]["document_name"],
             "OTP-HIRDETMÉNY.txt",
         )
+        self.assertEqual(
+            response.json()["sources"][0]["source_id"],
+            "OTP-HIRDETMÉNY.txt#chunk-3",
+        )
         self.assertEqual(response.json()["sources"][0]["similarity"], 0.91)
+
+    def test_retrieval_context_handles_no_sources_and_conflicting_sources(self) -> None:
+        no_sources_context = GenerationService.format_retrieved_context([])
+        self.assertIn("Nincs kellően releváns", no_sources_context)
+
+        conflicting_sources = [
+            RetrievedSource(
+                "policy.txt",
+                1,
+                "A díj 1 000 Ft.",
+                100,
+                114,
+                0.9,
+            ),
+            RetrievedSource(
+                "notice.txt",
+                2,
+                "A díj 1 500 Ft.",
+                200,
+                214,
+                0.88,
+            ),
+        ]
+        context = GenerationService.format_retrieved_context(conflicting_sources)
+
+        self.assertIn("policy.txt#chunk-1", context)
+        self.assertIn("notice.txt#chunk-2", context)
+        self.assertIn("A díj 1 000 Ft.", context)
+        self.assertIn("A díj 1 500 Ft.", context)
+        self.assertIn("ellentmondanak", PromptService(prompt_dir=DEFAULT_PROMPT_DIR).get_prompt("v1.1"))
+
+    def test_generate_without_relevant_sources_passes_explicit_empty_context(self) -> None:
+        class EmptyRetriever:
+            def retrieve(self, **kwargs: object) -> list[RetrievedSource]:
+                return []
+
+        self.generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=LLMService({"fake-model": self.model}, "fake-model"),
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+            retriever=EmptyRetriever(),
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "Kérdésem van."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sources"], [])
+        self.assertIn("Nincs kellően releváns dokumentumrészlet", self.model.prompt)
 
     def test_generate_rejects_invalid_retrieval_options(self) -> None:
         for options in (

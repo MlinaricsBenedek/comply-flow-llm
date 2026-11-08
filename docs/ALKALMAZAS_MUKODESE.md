@@ -70,7 +70,7 @@ A promptverzió azonosítója a promptfájl kiterjesztés nélküli neve: `promp
 
 `message` esetén az előfeldolgozás eredményéből származik a `customerMessage` és a `cleanedText` (a tisztított, anonimizált üzenet), a `caseType` (a besorolás), valamint a `structuredCaseState` (a kinyert tények). A kérés opcionális `category` és `facts` mezői ezek értékét felülírhatják; hiányuk esetén a feldolgozás eredménye kerül a promptba. A jelenlegi rendszerben nincs szabálymotor, ezért `ruleDecision` értéke `not_evaluated`, `ruleReason` ezt jelzi, `matchedRules` üres lista; a `responsePlan` szakmai, magyar nyelvű választ kér. A szabálymotor helyőrzők sem sugallják, hogy döntés történt.
 
-Azonos HTTP-szerződés használható Pythonból és ASP.NET-ből: a `message` mezővel mindkét kliens a szerveroldali előfeldolgozást kéri. Ha a kliens saját előfeldolgozást végez, az `input_data` objektumban kell elküldenie az összes használt promptváltozót: `customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules` és `responsePlan`. A repository nem tartalmaz ASP.NET-forráskódot, ezért annak DTO-leképezését itt nem lehet ellenőrizni; a közös JSON-szerződés mezőnevei camelCase alakúak. A hiányzó promptkulcs `400 GENERATION_INPUT_INVALID` hibát ad, a promptban nem marad behelyettesítetlenül.
+Azonos HTTP-szerződés használható Pythonból és ASP.NET-ből: a `message` mezővel mindkét kliens a szerveroldali előfeldolgozást kéri. Ha a kliens saját előfeldolgozást végez, az `input_data` objektumban kell elküldenie az ügyfél- és szabálykontextust (`customerMessage`, `caseType`, `structuredCaseState`, `ruleDecision`, `ruleReason`, `matchedRules`, `responsePlan`); a `retrievedContext` mezőt a szerver állítja elő a visszakeresett forrásokból, nem a kliens küldi. A repository nem tartalmaz ASP.NET-forráskódot, ezért annak DTO-leképezését itt nem lehet ellenőrizni; a közös JSON-szerződés mezőnevei camelCase alakúak. A hiányzó promptkulcs `400 GENERATION_INPUT_INVALID` hibát ad, a promptban nem marad behelyettesítetlenül.
 
 A feldolgozás menete:
 
@@ -106,7 +106,18 @@ A sikeres `/preprocessing` válasz minden esetben az `app.schemas.preprocessing.
     "do_sample": false
   },
   "reference_similarity": 0.8,
-  "reference_similarity_metric": "token_f1"
+  "reference_similarity_metric": "token_f1",
+  "sources": [
+    {
+      "source_id": "OTP-HIRDETMÉNY.txt#chunk-3",
+      "document_name": "OTP-HIRDETMÉNY.txt",
+      "chunk_index": 3,
+      "text": "A visszakeresett dokumentumrészlet.",
+      "start_char": 240,
+      "end_char": 286,
+      "similarity": 0.91
+    }
+  ]
 }
 ```
 
@@ -135,7 +146,7 @@ A kérés `X-Correlation-ID` fejlécét a szerver csak biztonságos karakterekke
 | Nem támogatott modell vagy modellparaméter | `400` | `MODEL_NOT_SUPPORTED` / `MODEL_PARAMETERS_INVALID` |
 | Nem található promptverzió | `404` | `PROMPT_VERSION_NOT_FOUND` |
 | Modell, prompt vagy preprocessing függőség nem érhető el | `503` | végponttól függő `*_UNAVAILABLE` |
-| A modell vagy pipeline ténylegesen `TimeoutError` kivételt jelez | `504` | `GENERATION_TIMEOUT` / `PREPROCESSING_TIMEOUT` |
+| A modell, retrieval vagy pipeline ténylegesen `TimeoutError` kivételt jelez | `504` | `GENERATION_TIMEOUT` / `RETRIEVAL_TIMEOUT` / `PREPROCESSING_TIMEOUT` |
 | Nem várt belső hiba | `500` | `INTERNAL_SERVER_ERROR` |
 
 Az alkalmazás alapértelmezés szerint a repository `prompts` könyvtárából tölti be a promptokat, így külön `PROMPT_DIR` beállítás nélkül is elindul a generálási szolgáltatás. Egyedi könyvtár a `PROMPT_DIR` változóval adható meg. Ha a könyvtár vagy az alapértelmezett prompt nem érhető el, az alkalmazás naplózza a konfigurációs hibát, elindul, a `/generate` pedig strukturált `503` választ ad. A `/health` továbbra is egyszerű folyamat-állapotjelzés.
@@ -144,7 +155,7 @@ Az alkalmazás induláskor beolvassa a `OTP-Uzletszabalyzat.txt`, `2012. évi CX
 
 Az embedding modell a `intfloat/multilingual-e5-small`, amely többnyelvű, így magyar szövegekhez is alkalmas. A 384 dimenziós modellhez a dokumentumrészleteket `passage: `, a későbbi keresési kérdéseket `query: ` előtaggal dolgozza fel; az embeddingeket attention-mask szerinti mean pooling után L2-normalizálja. Az `EmbeddingService` lustán tölti be a modellt a Transformers cache-ből vagy a Hugging Face-ről; a szolgáltatás különálló, és az alkalmazás indulásakor vagy panaszok feldolgozásakor nem fut le automatikusan. A `ChromaVectorStore` ChromaDB-ben, helyi, tartós tárolást használ; alapértelmezett helye a felhasználói könyvtár `.comply-flow\vector_store` mappája, ezt a `VECTOR_STORE_DIR` környezeti változóval lehet felülírni. A vektortár cosine távolságot használ, és a darabolt szöveg mellett megőrzi a forrásfájl nevét, darabsorszámát és karakterpozícióit. A dokumentumok külön indexelő parancsa: `python -m app.services.index_documents`. A `REFERENCE_DOCUMENTS_DIR` a TXT-k könyvtárát, a `VECTOR_STORE_DIR` a vektorindex helyét, az `EMBEDDING_MODEL_NAME` az embedding modellt állítja. A parancs minden futásakor újraolvassa, darabolja és beágyazza az aktuális dokumentumokat, majd dokumentumonként lecseréli az indexelt darabokat, a megmaradt fölösleges darabokat pedig törli. Ha bármelyik beolvasás vagy embeddingelés sikertelen, az indexelés az index módosítása előtt hibával leáll. A folyamatot külön kell elindítani; nem fut az API indulásakor vagy a panaszok feldolgozásakor. A vektorindex módosításakor már megtörténhet részleges frissítés, ha egy Chroma-írás hibázik; a parancs újbóli futtatása újrapróbálja az összes dokumentum indexelését.
 
-A `Retriever` cosine hasonlóság alapján keres a vektorindexben. Aktiválása a `RETRIEVAL_ENABLED=true` beállítással történik; alapértelmezetten kikapcsolt, így az indexelés nélküli telepítések és a meglévő generálási folyamat nem tölti be feleslegesen a keresőmodellt. Bekapcsolás után csak indexelt dokumentum esetén állít elő lekérdezés-embeddinget. Az alapértelmezett találatszám 5 (`RETRIEVAL_TOP_K`), a minimális hasonlóság 0,7 (`RETRIEVAL_MIN_SIMILARITY`, 0–1 cosine similarity). Ezek a `/generate` kérés `retrieval_top_k` és `retrieval_min_similarity` mezőivel felülírhatók. A keresés a tisztított/anonimizált ügyfélüzenet, az előfeldolgozott kategória és tények, valamint az elérhető szabályeredmény alapján építi össze a lekérdezést. A találat szövege és forrásadatai `retrievedSources` promptváltozóként kerülnek a generálásba, a válasz pedig a `sources` mezőben adja vissza a dokumentumnevet, darabsorszámot, karakterpozíciókat és hasonlósági értéket. Retrieval- vagy embedding-hiba esetén a végpont strukturált `503 RETRIEVAL_UNAVAILABLE` vagy timeoutnál `504 RETRIEVAL_TIMEOUT` hibát ad.
+A `Retriever` cosine hasonlóság alapján keres a vektorindexben. Aktiválása a `RETRIEVAL_ENABLED=true` beállítással történik; alapértelmezetten kikapcsolt, így az indexelés nélküli telepítések és a meglévő generálási folyamat nem tölti be feleslegesen a keresőmodellt. Bekapcsolás után csak indexelt dokumentum esetén állít elő lekérdezés-embeddinget. Az alapértelmezett találatszám 5 (`RETRIEVAL_TOP_K`), a minimális hasonlóság 0,7 (`RETRIEVAL_MIN_SIMILARITY`, 0–1 cosine similarity). Ezek a `/generate` kérés `retrieval_top_k` és `retrieval_min_similarity` mezőivel felülírhatók. A keresés a tisztított/anonimizált ügyfélüzenet, az előfeldolgozott kategória és tények, valamint az elérhető szabályeredmény alapján építi össze a lekérdezést. A találatok szövegéből és metaadataiból a `GenerationService` készíti a `retrievedContext` promptváltozót; az üres eredmény explicit módon jelzi, hogy nincs kellően releváns dokumentumrészlet. A `/generate` válasza a `sources` mezőben megőrzi a forrásfájl nevét, darabsorszámát, karakterpozícióit és hasonlósági értékét. A prompt előírja, hogy forrás nélküli jogi/szabályzati állítás ne szülessen, az ellentmondó forrásoknál pedig a modell ne döntsön önkényesen, hanem jelezze az eltérést és kérjen emberi ellenőrzést. Retrieval- vagy embedding-hiba esetén a végpont strukturált `503 RETRIEVAL_UNAVAILABLE` vagy timeoutnál `504 RETRIEVAL_TIMEOUT` hibát ad.
 
 ## API-példák
 

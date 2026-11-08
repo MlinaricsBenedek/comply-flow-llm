@@ -36,6 +36,10 @@ class RetrievedSource:
     end_char: int
     similarity: float
 
+    @property
+    def source_id(self) -> str:
+        return f"{self.document_name}#chunk-{self.chunk_index}"
+
 
 class Retriever:
     def __init__(

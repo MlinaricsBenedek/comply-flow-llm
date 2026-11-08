@@ -85,7 +85,7 @@ def generate_response(
                 "PREPROCESSING_TIMEOUT",
                 "The preprocessing request timed out.",
             ) from error
-        except (RuntimeError, ImportError, OSError, ValueError) as error:
+        except (RuntimeError, ImportError, OSError) as error:
             raise APIError(
                 503,
                 "PREPROCESSING_UNAVAILABLE",
@@ -145,19 +145,15 @@ def generate_response(
                         "RETRIEVAL_TIMEOUT",
                         "The document retrieval request timed out.",
                     ) from error
-                except (RuntimeError, ImportError, OSError) as error:
+                except (RuntimeError, ImportError, OSError, ValueError) as error:
                     raise APIError(
                         503,
                         "RETRIEVAL_UNAVAILABLE",
                         "The document retrieval service is unavailable.",
                     ) from error
-                input_data["retrievedSources"] = [
-                    asdict(source) for source in retrieved_sources
-                ]
-            else:
-                input_data["retrievedSources"] = []
-
-        input_data.setdefault("retrievedSources", [])
+        input_data["retrievedContext"] = (
+            generation_service.format_retrieved_context(retrieved_sources)
+        )
         result = generation_service.generate_result(
             input_data,
             prompt_name=payload.prompt_name,
@@ -199,7 +195,9 @@ def generate_response(
             "token_f1" if payload.reference_answer is not None else None
         ),
         sources=[
-            RetrievedSourceResponse.model_validate(asdict(source))
+            RetrievedSourceResponse.model_validate(
+                {**asdict(source), "source_id": source.source_id}
+            )
             for source in retrieved_sources
         ],
     )
