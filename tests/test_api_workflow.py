@@ -28,6 +28,7 @@ from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.anonymizer import MessageAnonymizer
 from app.Preprocessing.cleaner import MessageCleaner
 from app.services.generation_service import GenerationService
+from app.services.retriever import RetrievedSource
 from app.services.llm_service import LLMService
 from app.services.prompt_service import DEFAULT_PROMPT_DIR, PromptService
 from app.schemas.preprocessing import PreprocessingResponse
@@ -392,6 +393,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "model_parameters": {"max_new_tokens": 24, "do_sample": False},
                 "reference_similarity": None,
                 "reference_similarity_metric": None,
+                "sources": [],
             },
         )
         self.assertEqual(self.model.prompt, "Reply to clean:hello")
@@ -532,6 +534,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "tone": "professional",
                 "language": "Hungarian",
             },
+            "retrievedSources": [],
         }
         dotnet_context = expected_context.copy()
         python_context = GenerationRequest(
@@ -556,6 +559,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "ruleReason",
                 "matchedRules",
                 "responsePlan",
+                "retrievedSources",
             },
         )
         self.assertLessEqual(prompt_variables, set(python_context))
@@ -567,6 +571,110 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertNotRegex(dotnet_rendered, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
         self.assertIn("A termék meghibásodott.", python_rendered)
         self.assertIn("ASUS TUF A16 laptop", dotnet_rendered)
+
+    def test_generate_retrieves_sources_and_passes_them_to_prompt_and_response(self) -> None:
+        class FakeRetriever:
+            def __init__(self) -> None:
+                self.options: dict[str, object] | None = None
+
+            def retrieve(self, **kwargs: object) -> list[RetrievedSource]:
+                self.options = kwargs
+                return [
+                    RetrievedSource(
+                        document_name="OTP-HIRDETMÉNY.txt",
+                        chunk_index=3,
+                        text="A díj mértéke az aktuális hirdetmény szerint.",
+                        start_char=240,
+                        end_char=286,
+                        similarity=0.91,
+                    )
+                ]
+
+        retriever = FakeRetriever()
+        self.generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=LLMService({"fake-model": self.model}, "fake-model"),
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+            retriever=retriever,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "message": "Kérdésem van a kártyadíjról.",
+                "rule_decision": "provide_information",
+                "rule_reason": "Díj ellenőrzése szükséges.",
+                "matched_rules": ["CARD_FEE"],
+                "retrieval_top_k": 3,
+                "retrieval_min_similarity": 0.8,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            retriever.options,
+            {
+                "message": "clean:Kérdésem van a kártyadíjról.",
+                "facts": {"PERSON": []},
+                "category": "OTHER",
+                "rule_result": {
+                    "ruleDecision": "provide_information",
+                    "ruleReason": "Díj ellenőrzése szükséges.",
+                    "matchedRules": ["CARD_FEE"],
+                },
+                "top_k": 3,
+                "min_similarity": 0.8,
+            },
+        )
+        self.assertIn("A díj mértéke az aktuális hirdetmény szerint.", self.model.prompt)
+        self.assertIn("OTP-HIRDETMÉNY.txt", self.model.prompt)
+        self.assertEqual(
+            response.json()["sources"][0]["document_name"],
+            "OTP-HIRDETMÉNY.txt",
+        )
+        self.assertEqual(response.json()["sources"][0]["similarity"], 0.91)
+
+    def test_generate_rejects_invalid_retrieval_options(self) -> None:
+        for options in (
+            {"retrieval_top_k": 0},
+            {"retrieval_top_k": True},
+            {"retrieval_min_similarity": -0.1},
+            {"retrieval_min_similarity": 1.1},
+        ):
+            with self.subTest(options=options):
+                response = self.request(
+                    "POST",
+                    "/generate",
+                    json={"message": "Kérdésem van.", **options},
+                )
+                self.assertEqual(response.status_code, 422)
+
+    def test_retrieval_can_be_enabled_with_environment_configuration(self) -> None:
+        vector_store = object()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_ENABLED": "true",
+                    "RETRIEVAL_TOP_K": "3",
+                    "RETRIEVAL_MIN_SIMILARITY": "0.65",
+                },
+            ),
+            patch("app.main.ChromaVectorStore", return_value=vector_store),
+        ):
+            self.app = create_app(
+                state_builder=FakeStateBuilder(),
+                generation_service=self.generation_service,
+            )
+
+        retriever = self.app.state.retriever
+        self.assertEqual(retriever.top_k, 3)
+        self.assertEqual(retriever.min_similarity, 0.65)
+        self.assertIs(self.app.state.vector_store, vector_store)
 
     def test_generate_accepts_dotnet_style_input_data_with_prompt_context(self) -> None:
         prompt_service = PromptService(prompt_dir=DEFAULT_PROMPT_DIR)

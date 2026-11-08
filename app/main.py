@@ -1,11 +1,12 @@
-import os
 import logging
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 import re
 import uuid
 
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -22,10 +23,13 @@ from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.cleaner import MessageCleaner
 from app.Preprocessing.extractor import FactExtractor
 from app.services.document_chunker import DocumentChunker
+from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
 from app.services.reference_document_loader import ReferenceDocumentLoader
+from app.services.retriever import Retriever
+from app.services.vector_store import ChromaVectorStore
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +133,8 @@ def create_app(
     state_builder: StateBuilder | None = None,
     generation_service: GenerationService | None = None,
     reference_documents_dir: str | Path | None = None,
+    retriever: Retriever | None = None,
+    retrieval_enabled: bool | None = None,
 ) -> FastAPI:
     if state_builder is None:
         state_builder = _create_default_state_builder()
@@ -155,6 +161,20 @@ def create_app(
         if reference_documents is not None
         else None
     )
+    if retrieval_enabled is None:
+        retrieval_enabled = _read_bool_setting("RETRIEVAL_ENABLED", False)
+    vector_store = None
+    if retriever is None and retrieval_enabled:
+        vector_store = ChromaVectorStore()
+        retriever = Retriever.from_environment(
+            EmbeddingService(
+                model_name=os.getenv(
+                    "EMBEDDING_MODEL_NAME",
+                    "intfloat/multilingual-e5-small",
+                )
+            ),
+            vector_store,
+        )
 
     if generation_service is None:
         generation_parameters = {
@@ -222,9 +242,18 @@ def create_app(
     else:
         llm_service = getattr(generation_service, "llm_service", None)
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if vector_store is not None:
+                vector_store.close()
+
     application = FastAPI(
         title="Comply Flow AI Service",
         version="1.0.0",
+        lifespan=lifespan,
     )
 
     @application.middleware("http")
@@ -332,6 +361,8 @@ def create_app(
     application.state.llm_service = llm_service
     application.state.reference_documents = reference_documents
     application.state.reference_document_chunks = reference_document_chunks
+    application.state.retriever = retriever
+    application.state.vector_store = vector_store
 
     application.include_router(generation_router)
     application.include_router(health_router)

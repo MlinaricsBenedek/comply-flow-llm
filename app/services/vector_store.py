@@ -47,6 +47,8 @@ class VectorStore(Protocol):
 
     def delete_document(self, document_name: str) -> None: ...
 
+    def count(self) -> int: ...
+
     def close(self) -> None: ...
 
 
@@ -187,6 +189,9 @@ class ChromaVectorStore:
         if not document_name.strip():
             raise ValueError("document_name must not be empty.")
         self._collection.delete(where={"document_name": document_name})
+
+    def count(self) -> int:
+        return self._collection.count()
 
     def close(self) -> None:
         self._client.close()

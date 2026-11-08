@@ -21,6 +21,17 @@ class GenerationRequest(BaseModel):
     message: str | None = None
     facts: dict[str, list[str]] | None = None
     category: PreprocessingCategory | None = None
+    rule_decision: str | None = None
+    rule_reason: str | None = None
+    matched_rules: list[str] = Field(default_factory=list)
+    retrieval_top_k: int | None = Field(default=None, gt=0, strict=True)
+    retrieval_min_similarity: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        strict=True,
+    )
     prompt_name: str | None = Field(default=None, min_length=1)
     model_name: str | None = Field(default=None, min_length=1)
     model_parameters: ModelParameters | None = None
@@ -57,18 +68,29 @@ class GenerationRequest(BaseModel):
                 "structuredCaseState": (
                     self.facts if self.facts is not None else preprocessing_result.facts
                 ),
-                "ruleDecision": "not_evaluated",
-                "ruleReason": "No rule-engine decision is available.",
-                "matchedRules": [],
+                "ruleDecision": self.rule_decision or "not_evaluated",
+                "ruleReason": self.rule_reason
+                or "No rule-engine decision is available.",
+                "matchedRules": self.matched_rules,
                 "responsePlan": {
                     "tone": "professional",
                     "language": "Hungarian",
                 },
+                "retrievedSources": [],
             }
         if self.input_data is None:
             raise ValueError("Either input_data or message must be provided.")
 
         return self.input_data
+
+
+class RetrievedSourceResponse(BaseModel):
+    document_name: str
+    chunk_index: int = Field(ge=0)
+    text: str
+    start_char: int = Field(ge=0)
+    end_char: int = Field(ge=0)
+    similarity: float = Field(ge=0, le=1)
 
 
 class GenerationResponse(BaseModel):
@@ -82,6 +104,7 @@ class GenerationResponse(BaseModel):
     model_parameters: dict[str, int | float | bool]
     reference_similarity: float | None = Field(default=None, ge=0, le=1)
     reference_similarity_metric: Literal["token_f1"] | None = None
+    sources: list[RetrievedSourceResponse] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_reference_similarity(self) -> "GenerationResponse":
@@ -92,7 +115,6 @@ class GenerationResponse(BaseModel):
                 "reference_similarity and its metric must either both be set or both be null."
             )
         return self
-
 
 class ModelOption(BaseModel):
     name: str

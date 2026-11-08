@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, Request
 
 from app.api.errors import APIError, APIErrorResponse
@@ -6,6 +8,7 @@ from app.schemas.generation import (
     GenerationRequest,
     GenerationResponse,
     ModelOption,
+    RetrievedSourceResponse,
 )
 from app.schemas.preprocessing import PreprocessingResponse
 from app.services.generation_service import ModelGenerationError
@@ -82,7 +85,7 @@ def generate_response(
                 "PREPROCESSING_TIMEOUT",
                 "The preprocessing request timed out.",
             ) from error
-        except (RuntimeError, ImportError, OSError) as error:
+        except (RuntimeError, ImportError, OSError, ValueError) as error:
             raise APIError(
                 503,
                 "PREPROCESSING_UNAVAILABLE",
@@ -110,6 +113,51 @@ def generate_response(
 
     try:
         input_data = payload.to_input_data(preprocessing_result)
+        retrieved_sources = []
+        retriever = getattr(request.app.state, "retriever", None)
+        if retriever is not None:
+            query_message = input_data.get("cleanedText") or input_data.get(
+                "customerMessage"
+            )
+            if isinstance(query_message, str) and query_message.strip():
+                facts = input_data.get("structuredCaseState")
+                rule_result = {
+                    key: input_data[key]
+                    for key in ("ruleDecision", "ruleReason", "matchedRules")
+                    if key in input_data
+                }
+                try:
+                    retrieved_sources = retriever.retrieve(
+                        message=query_message,
+                        facts=facts if isinstance(facts, dict) else None,
+                        category=(
+                            input_data.get("caseType")
+                            if isinstance(input_data.get("caseType"), str)
+                            else None
+                        ),
+                        rule_result=rule_result,
+                        top_k=payload.retrieval_top_k,
+                        min_similarity=payload.retrieval_min_similarity,
+                    )
+                except TimeoutError as error:
+                    raise APIError(
+                        504,
+                        "RETRIEVAL_TIMEOUT",
+                        "The document retrieval request timed out.",
+                    ) from error
+                except (RuntimeError, ImportError, OSError) as error:
+                    raise APIError(
+                        503,
+                        "RETRIEVAL_UNAVAILABLE",
+                        "The document retrieval service is unavailable.",
+                    ) from error
+                input_data["retrievedSources"] = [
+                    asdict(source) for source in retrieved_sources
+                ]
+            else:
+                input_data["retrievedSources"] = []
+
+        input_data.setdefault("retrievedSources", [])
         result = generation_service.generate_result(
             input_data,
             prompt_name=payload.prompt_name,
@@ -150,4 +198,8 @@ def generate_response(
         reference_similarity_metric=(
             "token_f1" if payload.reference_answer is not None else None
         ),
+        sources=[
+            RetrievedSourceResponse.model_validate(asdict(source))
+            for source in retrieved_sources
+        ],
     )
