@@ -189,6 +189,8 @@ class GenerationService:
             "validation_requirements",
             response_plan.get("validationRequirements", {}),
         )
+        if validation_requirements is None:
+            validation_requirements = {}
         if not isinstance(validation_requirements, Mapping):
             raise ValueError("response_plan.validation_requirements must be an object.")
 

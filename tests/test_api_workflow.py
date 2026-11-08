@@ -1001,6 +1001,23 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("A csomag átadása: 2026-10-24.", self.model.prompt)
         self.assertIn("TESZT-123", self.model.prompt)
 
+    def test_generate_accepts_null_validation_requirements(self) -> None:
+        for field_name in ("validation_requirements", "validationRequirements"):
+            with self.subTest(field_name=field_name):
+                response = self.request(
+                    "POST",
+                    "/generate",
+                    json={
+                        "input_data": {
+                            "customerMessage": "Hol tart a rendelésem?",
+                            "response_plan": {field_name: None},
+                        },
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.model.prompt, "Reply to Hol tart a rendelésem?")
+
     def test_generate_reports_missing_required_content_after_repair_attempt(self) -> None:
         self.app = create_app(
             state_builder=FakeStateBuilder(),
