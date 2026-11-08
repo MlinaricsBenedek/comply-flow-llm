@@ -556,7 +556,13 @@ class APIWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             structured_request.to_input_data(),
-            {"customerMessage": "Szeretnék segítséget."},
+            {
+                "customerMessage": "Szeretnék segítséget.",
+                "ruleDecision": "not_evaluated",
+                "ruleReason": "No rule-engine decision is available.",
+                "matchedRules": [],
+                "bank": "OTP",
+            },
         )
 
     def test_default_prompt_placeholders_match_python_and_dotnet_context(self) -> None:
@@ -816,6 +822,83 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
 
+    def test_generate_accepts_dotnet_generation_payload(self) -> None:
+        class CapturingRetriever:
+            def __init__(self) -> None:
+                self.options: dict[str, object] | None = None
+
+            def retrieve(self, **kwargs: object) -> list[RetrievedSource]:
+                self.options = kwargs
+                return []
+
+        otp_retriever = CapturingRetriever()
+        raiffeisen_retriever = CapturingRetriever()
+        generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=self.generation_service.llm_service,
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(RuntimeError("must not preprocess")),
+            generation_service=generation_service,
+        )
+        self.app.state.retrievers = {
+            "OTP": otp_retriever,
+            "Raiffeisen": raiffeisen_retriever,
+        }
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "case_state": {"category": "Example"},
+                    "decision": "Approved",
+                    "reason": "A kiválasztott szabály indoklása",
+                    "rule_result": {"decision": "Approved"},
+                    "bank": "otp",
+                },
+                "message": "A preprocessing által tisztított üzenet",
+                "facts": {"amount": ["100"]},
+                "category": "Example",
+                "prompt_name": "v1.1",
+                "model_name": "fake-model",
+                "model_parameters": {},
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("A preprocessing által tisztított üzenet", self.model.prompt)
+        self.assertIn("Example", self.model.prompt)
+        self.assertIn("100", self.model.prompt)
+        self.assertIn("Approved", self.model.prompt)
+        self.assertIn("A kiválasztott szabály indoklása", self.model.prompt)
+        self.assertIsNotNone(otp_retriever.options)
+        self.assertIsNone(raiffeisen_retriever.options)
+        self.assertEqual(
+            otp_retriever.options["message"],
+            "A preprocessing által tisztított üzenet",
+        )
+        self.assertEqual(otp_retriever.options["facts"], {"amount": ["100"]})
+        self.assertEqual(otp_retriever.options["category"], "Example")
+        self.assertEqual(
+            otp_retriever.options["rule_result"]["ruleDecision"],
+            "Approved",
+        )
+
+    def test_generate_rejects_conflicting_bank_values(self) -> None:
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {"bank": "otp"},
+                "bank": "Raiffeisen",
+                "message": "Tisztított üzenet",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
     def test_retrieval_can_be_enabled_with_environment_configuration(self) -> None:
         vector_store = object()
         with (
@@ -1023,15 +1106,15 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
 
-    def test_generation_request_rejects_unknown_categories(self) -> None:
+    def test_generation_request_accepts_external_categories(self) -> None:
         response = self.request(
             "POST",
             "/generate",
             json={"message": "hello", "category": "NOT_A_CATEGORY"},
         )
 
-        self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["success"], True)
 
     def test_generation_model_parameters_reject_non_finite_values(self) -> None:
         with self.assertRaises(ValueError):

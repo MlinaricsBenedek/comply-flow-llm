@@ -67,7 +67,7 @@ def generate_response(
         raise APIError(503, "GENERATION_UNAVAILABLE", "The generation service is unavailable.")
 
     preprocessing_result = None
-    if payload.message is not None:
+    if payload.message is not None and payload.input_data is None:
         state_builder = request.app.state.state_builder
         if state_builder is None:
             raise APIError(
@@ -113,15 +113,15 @@ def generate_response(
 
     try:
         input_data = payload.to_input_data(preprocessing_result)
-        input_data["bank"] = payload.bank
+        input_data["bank"] = payload.selected_bank
         retrieved_sources = []
         retrievers = getattr(request.app.state, "retrievers", {})
         retriever = (
-            retrievers.get(payload.bank)
+            retrievers.get(payload.selected_bank)
             if isinstance(retrievers, dict)
             else None
         )
-        if retriever is None and payload.bank == "OTP":
+        if retriever is None and payload.selected_bank == "OTP":
             retriever = getattr(request.app.state, "retriever", None)
         if retriever is not None:
             query_message = input_data.get("cleanedText") or input_data.get(

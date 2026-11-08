@@ -44,7 +44,7 @@ A FastAPI alapértelmezett `/openapi.json`, `/docs` és `/redoc` felületei akt�
 ### 2.3 Generálási folyamat
 
 1. A kliens vagy közvetlen `input_data` objektumot küld, vagy `message` mezőt ad meg.
-2. `message` esetén a szolgáltatás előfeldolgozza az üzenetet. A generálás csak nem üres üzenet, nem részleges előfeldolgozás és nem `null` kategória esetén folytatódik.
+2. Ha csak `message` szerepel, a szolgáltatás előfeldolgozza az üzenetet. Ha `input_data` is szerepel, a `message` már előfeldolgozott szövegként, közvetlenül kerül felhasználásra, és az `input_data` üzleti kontextusával együtt alkot bemenetet.
 3. Ha a retrieval be van kapcsolva és elérhető, a szolgáltatás a tisztított üzenet, kategória, kinyert tények és kapott szabálykontextus alapján keres dokumentumrészleteket.
 4. A prompt szolgáltatás kiválasztja a promptot, majd behelyettesíti a bemeneti adatokat.
 5. Az LLM szolgáltatás kiválasztja a modellt, validálja a paramétereket, és meghívja a modellt.
@@ -90,12 +90,15 @@ A szabályok többek között tranzakciós illetékre, megtakarításokra és ka
 
 ### 3.4 `message` és `input_data` összeállítása
 
-- Legalább `message` vagy `input_data` megadása szükséges. Ha mindkettő szerepel, a `message` alapú bemenet az irányadó.
-- `message` esetén a `cleanedText` és `customerMessage` az anonimizált, tisztított üzenet; `caseType` a kérésben megadott `category`, ha van, egyébként az előfeldolgozás kategóriája.
-- `structuredCaseState` a kérésbeli `facts`, ha megadták, egyébként az előfeldolgozás tényei.
-- `ruleDecision` alapértéke `not_evaluated`; `ruleReason` alapértéke `No rule-engine decision is available.`; `matchedRules` alapértéke üres lista. Ezeket a bemeneti mezőket a kliens biztosíthatja; a backend nem futtat szabálymotort.
+- Legalább `message` vagy `input_data` megadása szükséges. Ha csak `message` érkezik, a backend előfeldolgozza; ha `input_data` is jelen van, a `message` a kliens által már megtisztított szöveg, ezért a szerver nem futtat rá újra a preprocessinget.
+- `message` és `input_data` együttes használatakor a szolgáltatás a `message` értékét `cleanedText` és `customerMessage` mezőként adja tovább.
+- A .NET-szerződésben szereplő `input_data.case_state` megmarad `case_state`/`caseState` mezőként. `caseType` a felső szintű `category`, ennek hiányában a `case_state.category` értékéből származik.
+- `structuredCaseState` a felső szintű `facts` mezőből származik; ha nincs megadva, az `input_data.facts`, majd a `case_state` használatos.
+- Az `input_data.decision` a prompt `ruleDecision` mezőjére, az `input_data.reason` a `ruleReason` mezőjére képeződik le. Ezek hiányában a `rule_result.decision` használható döntésként; a `rule_result` objektum egyébként is megmarad a bemenetben. A `matchedRules` hiányában a `rule_result.matched_rules` használható. A backend nem futtat szabálymotort.
+- A bank a felső szintű `bank`, ennek hiányában az `input_data.bank` értéke; elfogadott értékei kis-/nagybetűtől függetlenül `OTP` és `Raiffeisen`. Eltérő felső és belső bankérték validációs hiba. Ha egyik sincs megadva, `OTP` az alapértelmezés.
+- Csak `message` esetén, szabálykontextus nélkül `ruleDecision` alapértéke `not_evaluated`, `ruleReason` alapértéke `No rule-engine decision is available.`, `matchedRules` alapértéke üres lista.
 - A `retrievedContext` a találatok szövegéből készül, találat hiányában `Nincs kellően releváns dokumentumrészlet.`.
-- Közvetlen `input_data` esetén a mezőket a kliens biztosítja; a szolgáltatás csak a prompt behelyettesítésekor használt kulcsokat ellenőrzi.
+- Közvetlen `input_data` esetén a mezőket a kliens biztosítja; a régi promptkontextus kulcsai megmaradnak, az új .NET mezők pedig a fenti szabályok szerint normalizálódnak.
 - A `reference_answer` kizárólag az értékelési pontszámhoz használatos, nem kerül a modell promptjába.
 
 ### 3.5 Prompt és válaszgenerálás
@@ -158,10 +161,10 @@ Minden végpont ugyanazt a korrelációs azonosítót használja a válasz `X-Co
 | Mező | Típus / korlátozás | Funkció |
 |---|---|---|
 | `input_data` | tetszőleges JSON-objektum, opcionális | Közvetlen promptbemenet. |
-| `message` | sztring, opcionális | Előfeldolgozott ügyfélüzenet. |
-| `bank` | `OTP` vagy `Raiffeisen`; alapértelmezés: `OTP` | A retrievalhez használt, bankonként elkülönített szabálykészlet kiválasztása. |
-| `facts` | sztringlistákat tartalmazó objektum, opcionális | `message` esetén felülírja a kinyert tényeket. |
-| `category` | megengedett kategória, opcionális | `message` esetén felülírja a besorolást. |
+| `message` | sztring, opcionális | `input_data` mellett előfeldolgozott üzenet; nélküle a szerver előfeldolgozza. |
+| `bank` | `OTP` vagy `Raiffeisen`, kis-/nagybetűtől függetlenül; opcionális | A retrievalhez használt bank; ennek hiányában `input_data.bank`, majd `OTP`. |
+| `facts` | sztringlistákat tartalmazó objektum, opcionális | `input_data` mellett a `structuredCaseState` értéke; csak `message` esetén felülírja a kinyert tényeket. |
+| `category` | sztring, opcionális | `input_data` mellett `caseType`; csak `message` esetén felülírja a besorolást. |
 | `rule_decision` | sztring, opcionális | `ruleDecision` promptmező; a szolgáltatás nem értékeli ki. |
 | `rule_reason` | sztring, opcionális | `ruleReason` promptmező. |
 | `matched_rules` | sztringlista, alapértelmezés: `[]` | `matchedRules` promptmező. |
@@ -172,7 +175,7 @@ Minden végpont ugyanazt a korrelációs azonosítót használja a válasz `X-Co
 | `model_parameters` | objektum vagy `null` | Generálási paraméter-felülírások: `max_new_tokens`, `do_sample`, `temperature`, `top_p`. |
 | `reference_answer` | nem üres sztring vagy `null` | Opcionális token-F1 összehasonlításhoz; nem kerül a promptba. |
 
-Legalább a `message` vagy az `input_data` szükséges. A kérés ismeretlen legfelső szintű mezője validációs hibát ad. A `model_parameters` objektum ismeretlen paramétere a szolgáltatási validáció során `400 MODEL_PARAMETERS_INVALID` hibát ad.
+Legalább a `message` vagy az `input_data` szükséges. Ha mindkettő érkezik, a szolgáltatás a .NET-kliensek szerződése szerint a tisztított `message`-et az `input_data`-ból normalizált kontextussal együtt használja, és nem indít szerveroldali előfeldolgozást. A `case_state.category`, `decision`, `reason`, `rule_result.decision`, `bank`, `facts` és `category` értékek a 3.4. szakasz szerint a promptkontextusba képeződnek. A kérés ismeretlen legfelső szintű mezője validációs hibát ad. A `model_parameters` objektum ismeretlen paramétere a szolgáltatási validáció során `400 MODEL_PARAMETERS_INVALID` hibát ad.
 
 **Sikeres válaszmezők:**
 

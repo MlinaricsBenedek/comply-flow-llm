@@ -1,16 +1,21 @@
 {
   "input_data": {
-    "customerMessage": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
-    "cleanedText": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
-    "caseType": "DELIVERY",
-    "structuredCaseState": {
-      "order_id": "TESZT-123",
-      "delivery_status": "A csomagot 2026-10-24-én átadták a futárnak."
+    "case_state": {
+      "category": "DELIVERY"
     },
-    "ruleDecision": "not_evaluated",
-    "ruleReason": "A példa nem futtat szabálymotort.",
-    "matchedRules": []
+    "decision": "not_evaluated",
+    "reason": "A példa nem futtat szabálymotort.",
+    "rule_result": {
+      "decision": "not_evaluated"
+    },
+    "bank": "otp"
   },
+  "message": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
+  "facts": {
+    "order_id": ["TESZT-123"],
+    "delivery_status": ["A csomagot 2026-10-24-én átadták a futárnak."]
+  },
+  "category": "DELIVERY",
   "bank": "OTP",
   "prompt_name": "v1.1",
   "model_name": "qwen2.5-0.5b-instruct",
