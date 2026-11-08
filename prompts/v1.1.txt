@@ -11,6 +11,7 @@ Döntési javaslat: {{ruleDecision}}
 A döntés indoka: {{ruleReason}}
 Alkalmazott szabályok: {{matchedRules}}
 Visszakeresett dokumentumkontextus: {{retrievedContext}}
+Válaszellenőrzési követelmények: {{validationRequirements}}
 
 Válaszolj az ügyfél fő kérdésére. Ne sorold fel és ne ismételd meg a panasz
 adatait. Díj vagy terhelés jogosságáról csak akkor adj következtetést, ha azt
@@ -23,6 +24,10 @@ mindig külön kezelj.
 Csak a megadott adatokra és az ügyhöz tartozó dokumentumokra támaszkodj.
 Ne találj ki összeget, százalékot, minimumot, mentességet, határidőt vagy
 megtörtént intézkedést. Ha valami hiányzik, jelezd udvariasan.
+Az ellenőrzési követelmények között felsorolt kifejezéseket szó szerint építsd
+be a válaszba, és az ismert tényértékeket pontosan őrizd meg. Ha egy előírt
+tényhez nincs megadott érték, ne találd ki: kérdezz vissza vagy jelezd az adat
+hiányát.
 
 A mezőnevek és az ügyadatok belső információk. Ne másold ki a
 `structuredCaseState` mezőt; ne adj vissza JSON-t, táblázatot, adatlistát,

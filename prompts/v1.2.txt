@@ -11,11 +11,16 @@ A döntés indoka: {{ruleReason}}
 Alkalmazott szabályok: {{matchedRules}}
 Választerv: {{responsePlan}}
 Visszakeresett dokumentumkontextus: {{retrievedContext}}
+Válaszellenőrzési követelmények: {{validationRequirements}}
 
 Kizárólag a megadott adatokra támaszkodj. Ne találj ki rendelési adatot,
 határidőt, szabályt vagy már megtörtént intézkedést. Ha valamely szükséges
 információ hiányzik, ezt udvariasan jelezd, és kérdezz rá vagy irányítsd az
 ügyfelet az ügyfélszolgálathoz. Ne állíts jogi vagy adatvédelmi megfelelőséget
+Az ellenőrzési követelmények között felsorolt kifejezéseket szó szerint építsd
+be a válaszba, és az ismert tényértékeket pontosan őrizd meg. Ha egy előírt
+tényhez nincs megadott érték, ne találd ki: kérdezz vissza vagy jelezd az adat
+hiányát. Ne állíts jogi vagy adatvédelmi megfelelőséget
 bizonyíték nélkül. Jogi vagy szabályzati állítást csak a visszakeresett,
 az ügyhöz kapcsolódó dokumentumrészletek alapján tegyél; ha nincs ilyen
 forrás, ne következtess szabályra, hanem jelezd az információ hiányát és

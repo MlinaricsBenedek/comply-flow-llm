@@ -580,6 +580,8 @@ class APIWorkflowTests(unittest.TestCase):
             "ruleReason": "No rule-engine decision is available.",
             "matchedRules": [],
             "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
+            "responsePlan": {},
+            "validationRequirements": "Nincs külön válaszellenőrzési követelmény.",
         }
         dotnet_context = expected_context.copy()
         python_context = GenerationRequest(
@@ -593,6 +595,9 @@ class APIWorkflowTests(unittest.TestCase):
                 category=expected_context["caseType"],
             )
         )
+        python_context, _, _, _ = self.generation_service._prepare_prompt_input(
+            python_context
+        )
 
         self.assertEqual(
             prompt_variables,
@@ -604,6 +609,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "ruleReason",
                 "matchedRules",
                 "retrievedContext",
+                "validationRequirements",
             },
         )
         self.assertLessEqual(prompt_variables, set(python_context))
@@ -956,6 +962,99 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("A hiba alapján további egyeztetés szükséges.", self.model.prompt)
         self.assertNotIn('"tone"', self.model.prompt)
         self.assertNotRegex(self.model.prompt, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+
+    def test_generate_uses_snake_case_response_plan_and_checks_required_content(self) -> None:
+        self.model.response = (
+            "Kérem, fogadja el a tájékoztatást. A csomag átadása: "
+            "2026-10-24. Rendelési azonosító: TESZT-123."
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Hol tart a rendelésem?",
+                    "case_state": {
+                        "delivery_status": "A csomag átadása: 2026-10-24."
+                    },
+                    "facts": {"order_id": ["TESZT-123"]},
+                    "response_plan": {
+                        "validation_requirements": {
+                            "requiredPhrases": ["Kérem, fogadja el a tájékoztatást."],
+                            "requiredFacts": ["delivery_status", "order_id"],
+                        }
+                    },
+                },
+                "prompt_name": "v1.1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["response"], self.model.response)
+        self.assertIn("szó szerint", self.model.prompt)
+        self.assertIn("Kérem, fogadja el a tájékoztatást.", self.model.prompt)
+        self.assertIn("A csomag átadása: 2026-10-24.", self.model.prompt)
+        self.assertIn("TESZT-123", self.model.prompt)
+
+    def test_generate_reports_missing_required_content_after_repair_attempt(self) -> None:
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Hol tart a rendelésem?",
+                    "responsePlan": {
+                        "validation_requirements": {
+                            "requiredPhrases": ["A kért tájékoztatást megadtuk."],
+                            "requiredFacts": [],
+                        }
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertIn("Javítsd az előző választ", self.model.prompt)
+        self.assertIn("A kért tájékoztatást megadtuk.", self.model.prompt)
+
+    def test_generate_asks_for_unavailable_required_fact_without_inventing_it(self) -> None:
+        self.model.response = "Kérem, adja meg a rendelési azonosítóját."
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Hol tart a rendelésem?",
+                    "facts": {},
+                    "response_plan": {
+                        "validation_requirements": {
+                            "requiredPhrases": [],
+                            "requiredFacts": ["order_id"],
+                        }
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ne találj ki értéket", self.model.prompt)
+        self.assertIn("order_id", self.model.prompt)
 
     def test_generate_preprocesses_message_before_rendering_prompt(self) -> None:
         class CapturingStateBuilder(FakeStateBuilder):
