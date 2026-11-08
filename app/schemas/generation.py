@@ -182,7 +182,7 @@ class GenerationResponse(BaseModel):
     success: Literal[True] = True
     response: str = Field(min_length=1)
     prompt_version: str
-    model_name: str
+    model_name: str | None
     model_id: str | None
     model_parameters: dict[str, int | float | bool]
     reference_similarity: float | None = Field(default=None, ge=0, le=1)

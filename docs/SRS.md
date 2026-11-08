@@ -105,7 +105,9 @@ A szabályok többek között tranzakciós illetékre, megtakarításokra és ka
 
 A prompt alapértelmezése `v1.1`, illetve a `DEFAULT_PROMPT_NAME` környezeti változóval módosítható. A fájl kiterjesztés nélküli neve a prompt azonosítója. A `{{ kulcs }}` változóhoz hiányzó bemeneti kulcs érvénytelen generálási bemenet; a `null` érték `Not provided` szöveggé alakul. A lista-, tuple- és szótárértékek olvasható JSON-ként kerülnek a promptba, más értékek szöveges formára alakítódnak.
 
-A válasz nem lehet üres. A szolgáltatás elutasítja a tipikus belső döntési/választerv-fejléceket, JSON-választerveket, táblázatokat, egyes ténykinyerési mezőcímkéket és ismétlődő kimeneteket. Ha a `ruleDecision` nincs kiértékelve, a generált szöveg nem állíthatja, hogy a panasz, díj vagy terhelés jogos/jogtalan. Ezek a kimeneti ellenőrzések heurisztikusak, nem garantálják a modell minden hibájának felismerését.
+A `ClaimValid` és `ClaimInvalid` döntés a promptban egyértelmű pozitív, illetve negatív irányt ad az LLM-nek. A `BankTransferFeesGuidance` tájékoztatási útvonal: nem jelent jogos/jogtalan döntést, az LLM-nek a választerv utasításait kell követnie. A nem értékelt vagy ismeretlen döntés, illetve egyéb döntés hiányában az `OTHER` kategória semleges, ügyfélnek szóló választ ad LLM-hívás nélkül; ez sikeres `200` válasz, `model_name: null` és üres `model_parameters` mezőkkel. Az ilyen ág nem állítja, hogy a követelés helyes vagy helytelen.
+
+A modell által visszaadott üres, belső formátumú, az ügyfél teljes üzenetét visszamondó vagy előírt tartalmat kihagyó szöveg helyett a szolgáltatás az adott döntési ághoz illő semleges vagy döntésszöveget ad vissza `200` válaszként. Az LLM tényleges futtatási vagy elérhetőségi hibája továbbra is `503 LLM_UNAVAILABLE`; a `503` nem használatos pusztán azért, mert a modell válasza nem ügyfélnek való. A kimeneti ellenőrzések heurisztikusak, nem garantálják a modell minden tartalmi hibájának felismerését.
 
 ### 3.6 Dokumentum-visszakeresés
 
@@ -182,7 +184,7 @@ Legalább a `message` vagy az `input_data` szükséges. Ha mindkettő érkezik, 
 **Sikeres válaszmezők:**
 
 - `success: true`, `response`: nem üres, ügyfélnek szánt szöveg;
-- `prompt_version`, `model_name`, `model_id` és a tényleges `model_parameters`;
+- `prompt_version`, `model_name`, `model_id` és a tényleges `model_parameters`; ha az ügy semleges fallback ággal, LLM-hívás nélkül zárul, a `model_name` és `model_id` `null`, a `model_parameters` üres objektum;
 - `reference_similarity` és `reference_similarity_metric`, amelyek referencia nélkül `null` értékűek, referencia esetén a metrika `token_f1`;
 - `sources`: a retrieval forrástalálatai; retrieval nélkül üres lista.
 

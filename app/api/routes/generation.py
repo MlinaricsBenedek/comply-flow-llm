@@ -11,7 +11,6 @@ from app.schemas.generation import (
     RetrievedSourceResponse,
 )
 from app.schemas.preprocessing import PreprocessingResponse
-from app.services.generation_service import ModelGenerationError
 from app.services.llm_service import (
     InvalidModelParameters,
     ModelExecutionError,
@@ -182,7 +181,7 @@ def generate_response(
         raise APIError(400, "MODEL_PARAMETERS_INVALID", "The model parameters are invalid.") from error
     except ValueError as error:
         raise APIError(400, "GENERATION_INPUT_INVALID", "The generation input is invalid.") from error
-    except (ModelExecutionError, ModelGenerationError) as error:
+    except ModelExecutionError as error:
         raise APIError(503, "LLM_UNAVAILABLE", "The language model is temporarily unavailable.") from error
 
     return GenerationResponse(

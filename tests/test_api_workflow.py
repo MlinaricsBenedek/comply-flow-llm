@@ -424,6 +424,7 @@ class APIWorkflowTests(unittest.TestCase):
             "/generate",
             json={
                 "message": "hello",
+                "rule_decision": "provide_information",
                 "model_parameters": {"max_new_tokens": 24},
             },
         )
@@ -443,7 +444,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "sources": [],
             },
         )
-        self.assertEqual(self.model.prompt, "Reply to clean:hello")
+        self.assertTrue(self.model.prompt.startswith("Reply to clean:hello"))
         self.assertEqual(self.model.parameters, {"max_new_tokens": 24, "do_sample": False})
 
     def test_generation_uses_requested_model_and_model_specific_parameters(self) -> None:
@@ -470,6 +471,7 @@ class APIWorkflowTests(unittest.TestCase):
             "/generate",
             json={
                 "message": "hello",
+                "rule_decision": "provide_information",
                 "model_name": "alternate-model",
                 "model_parameters": {
                     "max_new_tokens": 48,
@@ -493,7 +495,7 @@ class APIWorkflowTests(unittest.TestCase):
             },
         )
         self.assertIsNone(self.model.prompt)
-        self.assertEqual(alternate_model.prompt, "Reply to clean:hello")
+        self.assertTrue(alternate_model.prompt.startswith("Reply to clean:hello"))
         self.assertEqual(
             alternate_model.parameters,
             {
@@ -510,6 +512,7 @@ class APIWorkflowTests(unittest.TestCase):
             "/generate",
             json={
                 "message": "hello",
+                "rule_decision": "provide_information",
                 "reference_answer": "Generated good reply",
             },
         )
@@ -517,7 +520,7 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reference_similarity"], 0.8)
         self.assertEqual(response.json()["reference_similarity_metric"], "token_f1")
-        self.assertEqual(self.model.prompt, "Reply to clean:hello")
+        self.assertTrue(self.model.prompt.startswith("Reply to clean:hello"))
 
     def test_generation_rejects_blank_reference_answer(self) -> None:
         response = self.request(
@@ -747,7 +750,7 @@ class APIWorkflowTests(unittest.TestCase):
         response = self.request(
             "POST",
             "/generate",
-            json={"message": "Kérdésem van."},
+            json={"message": "Kérdésem van.", "rule_decision": "provide_information"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -862,9 +865,9 @@ class APIWorkflowTests(unittest.TestCase):
             json={
                 "input_data": {
                     "case_state": {"category": "Example"},
-                    "decision": "Approved",
+                    "decision": "BankTransferFeesGuidance",
                     "reason": "A kiválasztott szabály indoklása",
-                    "rule_result": {"decision": "Approved"},
+                    "rule_result": {"decision": "BankTransferFeesGuidance"},
                     "bank": "otp",
                 },
                 "message": "A preprocessing által tisztított üzenet",
@@ -880,7 +883,7 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("A preprocessing által tisztított üzenet", self.model.prompt)
         self.assertIn("Example", self.model.prompt)
         self.assertIn("100", self.model.prompt)
-        self.assertIn("Approved", self.model.prompt)
+        self.assertIn("BankTransferFeesGuidance", self.model.prompt)
         self.assertIn("A kiválasztott szabály indoklása", self.model.prompt)
         self.assertIsNotNone(otp_retriever.options)
         self.assertIsNone(raiffeisen_retriever.options)
@@ -892,7 +895,7 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(otp_retriever.options["category"], "Example")
         self.assertEqual(
             otp_retriever.options["rule_result"]["ruleDecision"],
-            "Approved",
+            "BankTransferFeesGuidance",
         )
 
     def test_generate_rejects_conflicting_bank_values(self) -> None:
@@ -964,8 +967,100 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertIn("A laptop elromlott.", self.model.prompt)
         self.assertIn("ASUS TUF A16 laptop", self.model.prompt)
         self.assertIn("A hiba alapján további egyeztetés szükséges.", self.model.prompt)
+        self.assertIn(
+            "A döntés tájékoztatási útvonal, nem állapítja meg",
+            self.model.prompt,
+        )
         self.assertNotIn('"tone"', self.model.prompt)
         self.assertNotRegex(self.model.prompt, r"{{\s*[A-Za-z][A-Za-z0-9_]*\s*}}")
+
+    def test_rule_decisions_add_explicit_positive_or_negative_guidance(self) -> None:
+        cases = {
+            "ClaimValid": (
+                "A szabálymotor egyértelműen pozitív döntést adott",
+                "A panasz megalapozott.",
+            ),
+            "ClaimInvalid": (
+                "A szabálymotor egyértelműen negatív döntést adott",
+                "A panasz nem megalapozott.",
+            ),
+        }
+        for decision, (prompt_guidance, generated_response) in cases.items():
+            with self.subTest(decision=decision):
+                self.model.response = generated_response
+                response = self.request(
+                    "POST",
+                    "/generate",
+                    json={"message": "Panaszt teszek.", "rule_decision": decision},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["response"], generated_response)
+                self.assertIn(prompt_guidance, self.model.prompt)
+
+    def test_conflicting_model_verdict_uses_rule_decision_fallback(self) -> None:
+        self.model.response = "A panasz jogos."
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "Panaszt teszek.", "rule_decision": "ClaimInvalid"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("nem megalapozott", response.json()["response"])
+
+    def test_guidance_decision_includes_rule_response_instructions(self) -> None:
+        self.model.response = "Kérjük, adja meg a hiányzó adatokat."
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Panaszt teszek az átutalási díj miatt.",
+                    "caseType": "BANK_TRANSFER_FEES",
+                    "ruleDecision": "BankTransferFeesGuidance",
+                    "response_plan": {
+                        "response_structure": {
+                            "responseInstructions": (
+                                "Kérdezz rá a számlatípusra és a tranzakció csatornájára."
+                            )
+                        }
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Kérdezz rá a számlatípusra és a tranzakció csatornájára.",
+            self.model.prompt,
+        )
+        self.assertIn("nem állapítja meg", self.model.prompt)
+
+    def test_undetermined_and_out_of_scope_requests_return_neutral_200_without_llm(self) -> None:
+        cases = [
+            {
+                "message": "Panaszt teszek az átutalási díj miatt.",
+                "category": "BANK_TRANSFER_FEES",
+                "rule_decision": "not_evaluated",
+            },
+            {
+                "message": "Milyen laptopot vegyek?",
+                "category": "OTHER",
+            },
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.model.prompt = None
+                response = self.request("POST", "/generate", json=payload)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()["success"])
+                self.assertIn("nem tudok", response.json()["response"])
+                self.assertIsNone(response.json()["model_name"])
+                self.assertEqual(response.json()["model_parameters"], {})
+                self.assertIsNone(self.model.prompt)
 
     def test_generate_uses_snake_case_response_plan_and_checks_required_content(self) -> None:
         self.model.response = (
@@ -983,6 +1078,7 @@ class APIWorkflowTests(unittest.TestCase):
             json={
                 "input_data": {
                     "customerMessage": "Hol tart a rendelésem?",
+                    "ruleDecision": "provide_information",
                     "case_state": {
                         "delivery_status": "A csomag átadása: 2026-10-24."
                     },
@@ -1014,13 +1110,14 @@ class APIWorkflowTests(unittest.TestCase):
                     json={
                         "input_data": {
                             "customerMessage": "Hol tart a rendelésem?",
+                            "ruleDecision": "provide_information",
                             "response_plan": {field_name: None},
                         },
                     },
                 )
 
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(self.model.prompt, "Reply to Hol tart a rendelésem?")
+                self.assertIn("Reply to Hol tart a rendelésem?", self.model.prompt)
 
     def test_generate_reports_missing_required_content_after_repair_attempt(self) -> None:
         self.app = create_app(
@@ -1034,6 +1131,7 @@ class APIWorkflowTests(unittest.TestCase):
             json={
                 "input_data": {
                     "customerMessage": "Hol tart a rendelésem?",
+                    "ruleDecision": "provide_information",
                     "responsePlan": {
                         "validation_requirements": {
                             "requiredPhrases": ["A kért tájékoztatást megadtuk."],
@@ -1044,8 +1142,8 @@ class APIWorkflowTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("nem tudom megállapítani", response.json()["response"])
         self.assertIn("Javítsd az előző választ", self.model.prompt)
         self.assertIn("A kért tájékoztatást megadtuk.", self.model.prompt)
 
@@ -1062,6 +1160,7 @@ class APIWorkflowTests(unittest.TestCase):
             json={
                 "input_data": {
                     "customerMessage": "Hol tart a rendelésem?",
+                    "ruleDecision": "provide_information",
                     "facts": {},
                     "response_plan": {
                         "validation_requirements": {
@@ -1107,7 +1206,10 @@ class APIWorkflowTests(unittest.TestCase):
         response = self.request(
             "POST",
             "/generate",
-            json={"message": "My name is private, the laptop broke."},
+            json={
+                "message": "My name is private, the laptop broke.",
+                "rule_decision": "provide_information",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1195,26 +1297,26 @@ class APIWorkflowTests(unittest.TestCase):
             )
 
             first_result = generation_service.generate_result(
-                {"customerMessage": "hello"},
+                {"customerMessage": "hello", "ruleDecision": "provide_information"},
                 prompt_name="v1.1",
             )
             first_prompt = self.model.prompt
             second_result = generation_service.generate_result(
-                {"customerMessage": "hello"},
+                {"customerMessage": "hello", "ruleDecision": "provide_information"},
                 prompt_name="v2.0",
             )
             second_prompt = self.model.prompt
             default_result = generation_service.generate_result(
-                {"customerMessage": "hello"},
+                {"customerMessage": "hello", "ruleDecision": "provide_information"},
             )
             default_prompt = self.model.prompt
 
         self.assertEqual(first_result.prompt_version, "v1.1")
-        self.assertEqual(first_prompt, "VERSION_ONE hello")
+        self.assertTrue(first_prompt.startswith("VERSION_ONE hello"))
         self.assertEqual(second_result.prompt_version, "v2.0")
-        self.assertEqual(second_prompt, "VERSION_TWO hello")
+        self.assertTrue(second_prompt.startswith("VERSION_TWO hello"))
         self.assertEqual(default_result.prompt_version, "v1.1")
-        self.assertEqual(default_prompt, "VERSION_ONE hello")
+        self.assertTrue(default_prompt.startswith("VERSION_ONE hello"))
 
     def test_generation_request_rejects_unknown_top_level_fields(self) -> None:
         response = self.request(
@@ -1270,12 +1372,16 @@ class APIWorkflowTests(unittest.TestCase):
         response = self.request(
             "POST",
             "/generate",
-            json={"message": "hello", "prompt_name": "v2.0"},
+            json={
+                "message": "hello",
+                "prompt_name": "v2.0",
+                "rule_decision": "provide_information",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["prompt_version"], "v2.0")
-        self.assertEqual(self.model.prompt, "New prompt for clean:hello")
+        self.assertTrue(self.model.prompt.startswith("New prompt for clean:hello"))
 
     def test_local_model_path_is_not_returned(self) -> None:
         self.model.model_name = r"C:\private\models\customer-model"
@@ -1335,7 +1441,11 @@ class APIWorkflowTests(unittest.TestCase):
     def test_generation_failure_returns_sanitized_503(self) -> None:
         self.model.failure = OSError("private model cache path")
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
@@ -1347,10 +1457,14 @@ class APIWorkflowTests(unittest.TestCase):
             '"language": "Hungarian"}\n### Visszakeresett dokumentumkontextus'
         )
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
         self.assertNotIn("Döntési javaslat", response.text)
         self.assertNotIn('"tone"', response.text)
 
@@ -1369,11 +1483,16 @@ class APIWorkflowTests(unittest.TestCase):
         response = self.request(
             "POST",
             "/generate",
-            json={"input_data": {"customerMessage": customer_message}},
+            json={
+                "input_data": {
+                    "customerMessage": customer_message,
+                    "ruleDecision": "BankTransferFeesGuidance",
+                }
+            },
         )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
         self.assertNotIn("A magyar ügyfélszolgálati", response.text)
         self.assertNotIn(customer_message, response.text)
 
@@ -1383,10 +1502,14 @@ class APIWorkflowTests(unittest.TestCase):
             '"organization": ["OTP"], "miscellaneous": ["OTP InternetBank"]}'
         )
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
         self.assertNotIn('"price"', response.text)
 
     def test_generation_rejects_extracted_facts_markdown_table(self) -> None:
@@ -1397,19 +1520,27 @@ class APIWorkflowTests(unittest.TestCase):
             "| 1 200 Ft | OTP InternetBank | OTP |"
         )
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
         self.assertNotIn("Price", response.text)
 
     def test_generation_rejects_repeated_amount_loop(self) -> None:
         self.model.response = "A díj 713 Ft. A díj 713 Ft. A díj 713 Ft."
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
 
     def test_generation_rejects_complaint_verdict_when_rule_not_evaluated(self) -> None:
         self.model.response = "A panasz jogos."
@@ -1420,8 +1551,8 @@ class APIWorkflowTests(unittest.TestCase):
             json={"message": "hello", "rule_decision": "not_evaluated_as"},
         )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("nem tudok megbízható tájékoztatást adni", response.json()["response"])
         self.assertNotIn("jogos", response.text)
 
     def test_generation_allows_uncertain_answer_when_rule_not_evaluated(self) -> None:
@@ -1437,14 +1568,19 @@ class APIWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("nem állapítható meg", response.json()["response"])
+        self.assertIn("nem tudok megbízható tájékoztatást adni", response.json()["response"])
+        self.assertIsNone(self.model.prompt)
 
     def test_unexpected_generation_failure_returns_sanitized_500(self) -> None:
         self.generation_service.generate_result = lambda *args, **kwargs: (_ for _ in ()).throw(
             LookupError("private generation detail")
         )
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["error"]["code"], "INTERNAL_SERVER_ERROR")
@@ -1453,7 +1589,11 @@ class APIWorkflowTests(unittest.TestCase):
     def test_actual_generation_timeout_returns_504(self) -> None:
         self.model.failure = TimeoutError("internal timeout detail")
 
-        response = self.request("POST", "/generate", json={"message": "hello"})
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"message": "hello", "rule_decision": "provide_information"},
+        )
 
         self.assertEqual(response.status_code, 504)
         self.assertEqual(response.json()["error"]["code"], "GENERATION_TIMEOUT")
@@ -1668,7 +1808,7 @@ class APIWorkflowTests(unittest.TestCase):
             generation_response = self.request(
                 "POST",
                 "/generate",
-                json={"message": "hello"},
+                json={"message": "hello", "rule_decision": "provide_information"},
             )
         finally:
             if previous_prompt_dir is None:

@@ -14,13 +14,9 @@ from app.services.retriever import RetrievedSource
 class GenerationResult:
     response: str
     prompt_version: str
-    model_name: str
+    model_name: str | None
     model_id: str | None
     model_parameters: dict[str, int | float | bool]
-
-
-class ModelGenerationError(RuntimeError):
-    pass
 
 
 class GenerationService:
@@ -54,6 +50,21 @@ class GenerationService:
         r"(?:panasz\w*|díj\w*|terhelés\w*)\b",
         re.IGNORECASE,
     )
+    _positive_verdict_pattern = re.compile(
+        r"\b(?:jogos\w*|megalapozott\w*|helytálló\w*|helyes\w*)\b",
+        re.IGNORECASE,
+    )
+    _negative_verdict_pattern = re.compile(
+        r"\b(?:jogtalan\w*|nem\s+(?:jogos\w*|megalapozott\w*|"
+        r"helytálló\w*|helyes\w*)|megalapozatlan\w*|helytelen\w*)\b",
+        re.IGNORECASE,
+    )
+    _positive_decisions = {"claimvalid"}
+    _negative_decisions = {"claiminvalid"}
+    _guidance_decisions = {
+        "banktransferfeesguidance",
+        "provideinformation",
+    }
 
     def __init__(
         self,
@@ -128,6 +139,21 @@ class GenerationService:
             model_name,
             model_parameters,
         )
+        decision_kind = self._decision_kind(input_data)
+        if decision_kind in {"undetermined", "out_of_scope"}:
+            return GenerationResult(
+                response=self._fallback_response(decision_kind),
+                prompt_version=selected_prompt_name,
+                model_name=None,
+                model_id=None,
+                model_parameters={},
+            )
+
+        final_prompt = self._append_decision_guidance(
+            final_prompt,
+            decision_kind,
+            self._response_instructions(input_data),
+        )
         response = ""
         for attempt in range(2):
             prompt = final_prompt
@@ -145,23 +171,22 @@ class GenerationService:
 
             generated_response = self.llm_service.execute(prompt, model_configuration)
             if not isinstance(generated_response, str) or not generated_response.strip():
-                raise ModelGenerationError("The language model returned an empty response.")
+                response = self._fallback_response(decision_kind)
+                break
 
             response = generated_response.strip()
             if (
                 self._contains_internal_prompt_content(response)
                 or self._contains_customer_message_echo(response, input_data)
                 or self._contains_unsupported_decision(response, input_data)
+                or not self._matches_decision(response, decision_kind)
             ):
-                raise ModelGenerationError(
-                    "The language model returned a non-customer-facing or unsupported response."
-                )
+                response = self._fallback_response(decision_kind)
+                break
             if not self._missing_requirements(response, required_phrases, required_facts):
                 break
         else:
-            raise ModelGenerationError(
-                "The language model omitted required phrases or facts after a repair attempt."
-            )
+            response = self._fallback_response(decision_kind)
 
         return GenerationResult(
             response=response,
@@ -170,6 +195,123 @@ class GenerationService:
             model_id=model_configuration.model_id,
             model_parameters=model_configuration.model_parameters,
         )
+
+    @classmethod
+    def _decision_kind(cls, input_data: Mapping[str, object]) -> str:
+        decision = input_data.get("ruleDecision", input_data.get("decision"))
+        normalized_decision = (
+            normalize("NFKC", decision).casefold().replace("-", "_").strip()
+            if isinstance(decision, str)
+            else ""
+        )
+        normalized_key = normalized_decision.replace("_", "").replace(" ", "")
+        if normalized_key in cls._positive_decisions:
+            return "positive"
+        if normalized_key in cls._negative_decisions:
+            return "negative"
+        if normalized_key in cls._guidance_decisions:
+            return "guidance"
+
+        category = input_data.get("caseType")
+        for key in ("case_state", "caseState"):
+            state = input_data.get(key)
+            if isinstance(state, Mapping) and state.get("category") is not None:
+                category = state["category"]
+                break
+        if isinstance(category, str) and category.strip().casefold() == "other":
+            return "out_of_scope"
+        return "undetermined"
+
+    @staticmethod
+    def _fallback_response(decision_kind: str) -> str:
+        if decision_kind == "positive":
+            return "A rendelkezésre álló döntés alapján a követelése megalapozott."
+        if decision_kind == "negative":
+            return "A rendelkezésre álló döntés alapján a követelése nem megalapozott."
+        if decision_kind == "guidance":
+            return (
+                "A rendelkezésre álló adatok alapján a díj helyességét nem tudom "
+                "megállapítani. Kérjük, forduljon ügyfélszolgálatunkhoz az ügy "
+                "és a vonatkozó díjhirdetmény ellenőrzéséért."
+            )
+        if decision_kind == "out_of_scope":
+            return (
+                "Sajnálom, ebben a témában nem tudok megbízható tájékoztatást adni. "
+                "Kérjük, forduljon az adott témában illetékes ügyfélszolgálathoz."
+            )
+        return (
+            "A rendelkezésre álló adatok alapján nem tudok megbízható választ adni. "
+            "Kérjük, pontosítsa a kérdését, vagy forduljon ügyfélszolgálatunkhoz."
+        )
+
+    @classmethod
+    def _response_instructions(cls, input_data: Mapping[str, object]) -> str | None:
+        candidates: list[object] = [
+            input_data.get("response_plan"),
+            input_data.get("responsePlan"),
+            input_data.get("rule_result"),
+            input_data.get("ruleResult"),
+        ]
+        for candidate in list(candidates):
+            if isinstance(candidate, Mapping):
+                candidates.extend(
+                    (
+                        candidate.get("response_structure"),
+                        candidate.get("responseStructure"),
+                    )
+                )
+
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            for key in ("responseInstructions", "response_instructions"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    @staticmethod
+    def _append_decision_guidance(
+        prompt: str,
+        decision_kind: str,
+        response_instructions: str | None,
+    ) -> str:
+        guidance = {
+            "positive": (
+                "A szabálymotor egyértelműen pozitív döntést adott: a követelés "
+                "helytálló. Ezt világosan közöld az ügyféllel, és ne változtasd "
+                "meg az irányát."
+            ),
+            "negative": (
+                "A szabálymotor egyértelműen negatív döntést adott: a követelés "
+                "nem helytálló. Ezt világosan közöld az ügyféllel, és ne változtasd "
+                "meg az irányát."
+            ),
+            "guidance": (
+                "A döntés tájékoztatási útvonal, nem állapítja meg, hogy a követelés "
+                "helyes vagy helytelen. Ne adj ilyen ítéletet; a következő "
+                "utasítások alapján válaszolj, és ha hiányzik adat, kérdezz rá."
+            ),
+        }[decision_kind]
+        if response_instructions:
+            guidance = f"{guidance}\nVálasztervi utasítások:\n{response_instructions}"
+        return f"{prompt}\n\nDöntéskezelés:\n{guidance}"
+
+    @classmethod
+    def _matches_decision(cls, response: str, decision_kind: str) -> bool:
+        if decision_kind == "positive":
+            return bool(
+                cls._positive_verdict_pattern.search(response)
+                and not cls._negative_verdict_pattern.search(response)
+            )
+        if decision_kind == "negative":
+            return bool(
+                cls._negative_verdict_pattern.search(response)
+                and not cls._positive_verdict_pattern.search(
+                    cls._negative_verdict_pattern.sub("", response)
+                )
+            )
+        return True
 
     @classmethod
     def _prepare_prompt_input(
