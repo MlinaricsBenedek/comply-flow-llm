@@ -921,6 +921,16 @@ class APIWorkflowTests(unittest.TestCase):
             )
 
         self.assertEqual(self.app.state.reference_documents, expected)
+        chunks = self.app.state.reference_document_chunks
+        self.assertIsNotNone(chunks)
+        self.assertEqual(set(chunks), set(expected))
+        self.assertTrue(
+            all(
+                chunk.document_name == filename
+                for filename, document_chunks in chunks.items()
+                for chunk in document_chunks
+            )
+        )
 
     def test_preprocessing_unexpected_failure_returns_sanitized_500(self) -> None:
         self.app = create_app(

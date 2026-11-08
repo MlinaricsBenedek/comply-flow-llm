@@ -21,6 +21,7 @@ from app.Preprocessing.anonymizer import MessageAnonymizer
 from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.cleaner import MessageCleaner
 from app.Preprocessing.extractor import FactExtractor
+from app.services.document_chunker import DocumentChunker
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
@@ -149,6 +150,11 @@ def create_app(
             extra={"exception_type": type(error).__name__},
         )
         reference_documents = None
+    reference_document_chunks = (
+        DocumentChunker().chunk_documents(reference_documents)
+        if reference_documents is not None
+        else None
+    )
 
     if generation_service is None:
         generation_parameters = {
@@ -325,6 +331,7 @@ def create_app(
     application.state.generation_service = generation_service
     application.state.llm_service = llm_service
     application.state.reference_documents = reference_documents
+    application.state.reference_document_chunks = reference_document_chunks
 
     application.include_router(generation_router)
     application.include_router(health_router)
