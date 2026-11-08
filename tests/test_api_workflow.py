@@ -1114,6 +1114,14 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
         self.assertNotIn("Price", response.text)
 
+    def test_generation_rejects_repeated_amount_loop(self) -> None:
+        self.model.response = "A díj 713 Ft. A díj 713 Ft. A díj 713 Ft."
+
+        response = self.request("POST", "/generate", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+
     def test_generation_rejects_complaint_verdict_when_rule_not_evaluated(self) -> None:
         self.model.response = "A panasz jogos."
 

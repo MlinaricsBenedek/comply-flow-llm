@@ -156,6 +156,7 @@ class GenerationService:
             or cls._response_plan_json_pattern.search(response)
             or cls._table_pattern.search(response)
             or cls._extracted_field_pattern.search(response)
+            or cls._contains_repetitive_phrases(response)
         ):
             return True
 
@@ -176,6 +177,27 @@ class GenerationService:
             if isinstance(parsed, (dict, list)):
                 return True
         return False
+
+    @classmethod
+    def _contains_repetitive_phrases(cls, response: str) -> bool:
+        tokens = [
+            token
+            for token in cls._word_pattern.findall(
+                normalize("NFKC", response).casefold()
+            )
+        ]
+        if len(tokens) < 6:
+            return False
+
+        bigrams = Counter(zip(tokens, tokens[1:]))
+        if any(
+            count >= 3 and any(part.isdigit() for part in phrase)
+            for phrase, count in bigrams.items()
+        ):
+            return True
+
+        trigrams = Counter(zip(tokens, tokens[1:], tokens[2:]))
+        return any(count >= 3 for count in trigrams.values())
 
     @classmethod
     def _contains_unsupported_decision(
