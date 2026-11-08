@@ -1354,6 +1354,29 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertNotIn("Döntési javaslat", response.text)
         self.assertNotIn('"tone"', response.text)
 
+    def test_generation_rejects_prompt_and_customer_message_echo(self) -> None:
+        customer_message = (
+            "Panaszt teszek az átutalási díj miatt. Az OTP forint megtakarítási "
+            "számlámról az OTP MobilBankon keresztül 168 000 Ft-ot utaltam "
+            "egy másik OTP-ügyfél nem saját számlájára."
+        )
+        self.model.response = (
+            "A magyar ügyfélszolgálati munkatárs vagy. Írj természetes, helyes, "
+            "közérthető és udvarias magyar választ. Az ügyfél üzenete: "
+            f"{customer_message}"
+        )
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={"input_data": {"customerMessage": customer_message}},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertNotIn("A magyar ügyfélszolgálati", response.text)
+        self.assertNotIn(customer_message, response.text)
+
     def test_generation_rejects_extracted_facts_json_in_model_response(self) -> None:
         self.model.response = (
             '{"price": ["100 000 Ft", "1 200 Ft", "713 Ft"], '

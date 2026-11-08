@@ -33,6 +33,11 @@ class GenerationService:
         r"(?:\s*:|[ \t]*$)",
         re.IGNORECASE | re.MULTILINE,
     )
+    _internal_instruction_pattern = re.compile(
+        r"magyar\s+ügyfélszolgálati\s+munkatárs\s+vagy|"
+        r"az\s+ügyfél\s+üzenete\s*:",
+        re.IGNORECASE,
+    )
     _response_plan_json_pattern = re.compile(
         r"""["'](?:tone|language)["']\s*:""",
         re.IGNORECASE,
@@ -143,8 +148,10 @@ class GenerationService:
                 raise ModelGenerationError("The language model returned an empty response.")
 
             response = generated_response.strip()
-            if self._contains_internal_prompt_content(response) or (
-                self._contains_unsupported_decision(response, input_data)
+            if (
+                self._contains_internal_prompt_content(response)
+                or self._contains_customer_message_echo(response, input_data)
+                or self._contains_unsupported_decision(response, input_data)
             ):
                 raise ModelGenerationError(
                     "The language model returned a non-customer-facing or unsupported response."
@@ -388,6 +395,7 @@ class GenerationService:
     def _contains_internal_prompt_content(cls, response: str) -> bool:
         if (
             cls._internal_heading_pattern.search(response)
+            or cls._internal_instruction_pattern.search(response)
             or cls._response_plan_json_pattern.search(response)
             or cls._table_pattern.search(response)
             or cls._extracted_field_pattern.search(response)
@@ -410,6 +418,26 @@ class GenerationService:
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, (dict, list)):
+                return True
+        return False
+
+    @classmethod
+    def _contains_customer_message_echo(
+        cls,
+        response: str,
+        input_data: Mapping[str, object],
+    ) -> bool:
+        normalized_response = " ".join(
+            normalize("NFKC", response).casefold().split()
+        )
+        for key in ("customerMessage", "cleanedText"):
+            message = input_data.get(key)
+            if not isinstance(message, str):
+                continue
+            normalized_message = " ".join(
+                normalize("NFKC", message).casefold().split()
+            )
+            if len(normalized_message) >= 40 and normalized_message in normalized_response:
                 return True
         return False
 
