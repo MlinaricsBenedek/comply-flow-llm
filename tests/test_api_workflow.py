@@ -344,6 +344,10 @@ class APIWorkflowTests(unittest.TestCase):
             "Milyen feltételekkel nyitható megtakarítási számla?": "SAVINGS_ACCOUNT_TERMS",
             "Ki jogosult a Persely használatára?": "SAVINGS_ACCOUNT_TERMS",
             "Mennyibe kerül az átutalás díja?": "BANK_TRANSFER_FEES",
+            (
+                "OTP forint megtakarítási számláról indított utalásért "
+                "1200 Ft-ot vontak le, de 500 Ft-ra számítottam."
+            ): "BANK_TRANSFER_FEES",
             "Az átutalás tranzakciós illetéke mennyi?": "TRANSACTION_TAX",
             "A megtakarítási számlámról havi díjat vontak le.": "SAVINGS_ACCOUNT_FEES",
             "Panaszt teszek a megtakarítási számla díja miatt.": "SAVINGS_ACCOUNT_FEES",

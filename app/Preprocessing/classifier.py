@@ -58,8 +58,10 @@ class MessageClassifier:
 			"BANK_TRANSFER_FEES",
 			re.compile(
 				r"\b(?:átutal\w*|utalás\w*|átvezet\w*)\b.{0,80}"
-				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*)\b|"
-				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*)\b.{0,80}"
+				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*|"
+				r"vontak\s+le)\b|"
+				r"\b(?:díj\w*|költség\w*|jutalék\w*|terhel\w*|levon\w*|"
+				r"vontak\s+le)\b.{0,80}"
 				r"\b(?:átutal\w*|utalás\w*|átvezet\w*)\b"
 			),
 		),
