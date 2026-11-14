@@ -18,7 +18,7 @@ from app.Preprocessing.state_builder import StateBuilder
 from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
 from app.api.routes.preprocessing import router as preprocessing_router
-from app.models.llm_model import LlamaModel, QwenModel, HuggingFaceInferenceAPIModel
+from app.models.llm_model import QwenModel
 from app.Preprocessing.anonymizer import MessageAnonymizer
 from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.cleaner import MessageCleaner
@@ -217,69 +217,19 @@ def create_app(
             "top_p": float(os.getenv("LLM_TOP_P", "1.0")),
         }
         
-        # Validate all model configuration parameters early to catch invalid settings
         qwen2_5_params = _model_generation_parameters("QWEN2_5", generation_parameters)
-        qwen2_5_1_5_params = _model_generation_parameters("QWEN2_5_1_5", generation_parameters)
-        qwen2_params = _model_generation_parameters("QWEN2", generation_parameters)
-        llama_tiny_params = _model_generation_parameters("LLAMA_TINY", generation_parameters)
-        llama3_2_params = _model_generation_parameters("LLAMA3_2", generation_parameters)
-        
+
         default_model_name = os.getenv("DEFAULT_LLM_MODEL", "qwen2.5-0.5b-instruct")
-        hf_token = os.getenv("HF_TOKEN")
-        
-        models = {}
-        
-        # Prefer Hugging Face Inference API if HF_TOKEN is set
-        # Otherwise, fall back to loading local models
-        if hf_token:
-            # Use Hugging Face Inference API for the default model
-            # This eliminates memory overhead and initialization time from local model loading
-            logger.info("Using Hugging Face Inference API for model inference")
-            models[default_model_name] = HuggingFaceInferenceAPIModel(
+        models = {
+            default_model_name: QwenModel(
                 model_name=os.getenv(
                     "QWEN2_5_MODEL_NAME",
                     os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
                 ),
                 **qwen2_5_params,
             )
-        else:
-            # Fall back to local models if HF_TOKEN is not set
-            logger.warning("HF_TOKEN not set, falling back to local model loading")
-            models = {
-                "qwen2.5-0.5b-instruct": QwenModel(
-                    model_name=os.getenv(
-                        "QWEN2_5_MODEL_NAME",
-                        os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
-                    ),
-                    **qwen2_5_params,
-                ),
-                "qwen2.5-1.5b-instruct": QwenModel(
-                    model_name=os.getenv(
-                        "QWEN2_5_1_5_MODEL_NAME",
-                        "Qwen/Qwen2.5-1.5B-Instruct",
-                    ),
-                    **qwen2_5_1_5_params,
-                ),
-                "qwen2-0.5b-instruct": QwenModel(
-                    model_name=os.getenv(
-                        "QWEN2_MODEL_NAME", "Qwen/Qwen2-0.5B-Instruct"
-                    ),
-                    **qwen2_params,
-                ),
-                "llama-tiny-1.1b-chat": LlamaModel(
-                    model_name=os.getenv(
-                        "LLAMA_MODEL_NAME", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-                    ),
-                    **llama_tiny_params,
-                ),
-                "llama-3.2-1b-instruct": LlamaModel(
-                    model_name=os.getenv(
-                        "LLAMA3_2_MODEL_NAME", "meta-llama/Llama-3.2-1B-Instruct"
-                    ),
-                    **llama3_2_params,
-                ),
-            }
-        
+        }
+
         default_model = default_model_name
         llm_service = LLMService(
             models=models,
@@ -315,31 +265,20 @@ def create_app(
         warmup_start = __import__("time").perf_counter()
         
         if generation_service is not None and llm_service is not None:
-            # Preload only the default LLM model to reduce memory footprint
-            # Skip warmup for Inference API models (they don't need local initialization)
             default_model = llm_service.default_model
             llm_model = llm_service._models[default_model]
-            
-            if not isinstance(llm_model, HuggingFaceInferenceAPIModel):
-                try:
-                    model_start = __import__("time").perf_counter()
-                    config = llm_service.model_configuration(default_model)
-                    # Trigger lazy load by calling generate with minimal input
-                    llm_model.generate(".")
-                    model_time = __import__("time").perf_counter() - model_start
-                    logger.info(
-                        "model_warmup_complete",
-                        extra={"model": default_model, "duration_ms": int(model_time * 1000)},
-                    )
-                except Exception as error:
-                    logger.warning(
-                        "model_warmup_failed",
-                        extra={"model": default_model, "error_type": type(error).__name__},
-                    )
-            else:
+            try:
+                model_start = __import__("time").perf_counter()
+                llm_model.generate(".")
+                model_time = __import__("time").perf_counter() - model_start
                 logger.info(
-                    "model_warmup_skipped",
-                    extra={"model": default_model, "reason": "using_hugging_face_inference_api"},
+                    "model_warmup_complete",
+                    extra={"model": default_model, "duration_ms": int(model_time * 1000)},
+                )
+            except Exception as error:
+                logger.warning(
+                    "model_warmup_failed",
+                    extra={"model": default_model, "error_type": type(error).__name__},
                 )
             
             # Preload NER model (if state_builder is configured)
@@ -391,7 +330,7 @@ def create_app(
     @application.middleware("http")
     async def timeout_middleware(request: Request, call_next):
         """Enforce request timeout to prevent long-running operations from blocking."""
-        timeout_seconds = 60  # Matches typical upstream timeout (nginx, ALB)
+        timeout_seconds = 600
         try:
             response = await asyncio.wait_for(call_next(request), timeout=timeout_seconds)
             return response
@@ -533,5 +472,5 @@ def create_app(
     return application
 
 
-# Initialize the app with Inference API if available, otherwise with local models
+# Initialize the app with the local Qwen model.
 app = create_app()

@@ -23,6 +23,7 @@ from app.schemas.generation import (
     ModelParameters,
 )
 from app.main import create_app
+from app.models.llm_model import QwenModel
 from app.Preprocessing.state_builder import StateBuilder
 from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.anonymizer import MessageAnonymizer
@@ -2028,45 +2029,25 @@ class APIWorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 PromptService(prompt_dir=prompt_directory)
 
-    def test_default_app_initializes_generation_and_model_catalog(self) -> None:
-        with patch.dict(os.environ, {"HF_TOKEN": "test-token"}):
+    def test_default_app_uses_only_qwen_without_hugging_face_token(self) -> None:
+        with patch.dict(os.environ):
+            os.environ.pop("HF_TOKEN", None)
             self.app = create_app()
 
         self.assertIsNotNone(self.app.state.generation_service)
         response = self.request("GET", "/models")
         self.assertEqual(response.status_code, 200)
-        self.assertGreater(len(response.json()["models"]), 0)
-        self.assertTrue(
-            any(model["is_default"] for model in response.json()["models"])
+        models = response.json()["models"]
+        self.assertEqual(len(models), 1)
+        self.assertEqual(models[0]["name"], "qwen2.5-0.5b-instruct")
+        self.assertTrue(models[0]["is_default"])
+        self.assertIsInstance(
+            self.app.state.llm_service._models["qwen2.5-0.5b-instruct"],
+            QwenModel,
         )
-
-    @unittest.skip("Not supported in Inference API mode - only default model is available")
-    def test_selects_qwen_1_5b_for_generation(self) -> None:
-        self.app = create_app(
-            state_builder=FakeStateBuilder(),
-            retrieval_enabled=False,
-        )
-        with patch(
-            "app.models.llm_model.HuggingFaceChatModel.generate",
-            return_value="Kérjük, ellenőrizze a díjat.",
-        ):
-            response = self.request(
-                "POST",
-                "/generate",
-                json={
-                    "message": "Panasz az átutalási díj miatt.",
-                    "rule_decision": "provide_information",
-                    "model_name": "qwen2.5-1.5b-instruct",
-                },
-            )
-
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["model_name"], "qwen2.5-1.5b-instruct")
-        self.assertEqual(response.json()["model_id"], "Qwen/Qwen2.5-1.5B-Instruct")
-        self.assertEqual(response.json()["response"], "Kérjük, ellenőrizze a díjat.")
 
     def test_invalid_model_configuration_fails_app_creation(self) -> None:
-        with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan", "HF_TOKEN": "test-token"}):
+        with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan"}):
             with self.assertRaises(ValueError):
                 create_app()
 
@@ -2077,7 +2058,6 @@ class APIWorkflowTests(unittest.TestCase):
             "QWEN2_5_DO_SAMPLE": "true",
             "QWEN2_5_TEMPERATURE": "0.65",
             "QWEN2_5_TOP_P": "0.88",
-            "HF_TOKEN": "test-token",
         }
         with patch.dict(os.environ, settings):
             self.app = create_app()
@@ -2122,9 +2102,7 @@ class APIWorkflowTests(unittest.TestCase):
 
     def test_missing_prompt_directory_keeps_app_available(self) -> None:
         previous_prompt_dir = os.environ.get("PROMPT_DIR")
-        previous_hf_token = os.environ.get("HF_TOKEN")
         os.environ["PROMPT_DIR"] = str(Path(_PROMPT_DIRECTORY.name, "missing"))
-        os.environ["HF_TOKEN"] = "test-token"
         try:
             self.app = create_app()
             health_response = self.request("GET", "/health")
@@ -2138,10 +2116,6 @@ class APIWorkflowTests(unittest.TestCase):
                 os.environ.pop("PROMPT_DIR", None)
             else:
                 os.environ["PROMPT_DIR"] = previous_prompt_dir
-            if previous_hf_token is None:
-                os.environ.pop("HF_TOKEN", None)
-            else:
-                os.environ["HF_TOKEN"] = previous_hf_token
 
         self.assertEqual(health_response.status_code, 200)
         self.assertEqual(generation_response.status_code, 503)

@@ -225,12 +225,8 @@ Az LLM-modellek közös `HuggingFaceChatModel` adaptert használnak. A Hugging F
 | API-modellkulcs | Alapértelmezett Hugging Face modellazonosító |
 |---|---|
 | `qwen2.5-0.5b-instruct` | `Qwen/Qwen2.5-0.5B-Instruct` |
-| `qwen2.5-1.5b-instruct` | `Qwen/Qwen2.5-1.5B-Instruct` |
-| `qwen2-0.5b-instruct` | `Qwen/Qwen2-0.5B-Instruct` |
-| `llama-tiny-1.1b-chat` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
-| `llama-3.2-1b-instruct` | `meta-llama/Llama-3.2-1B-Instruct` |
 
-A modellkulcsot kell a `model_name` mezőben megadni, nem a Hugging Face azonosítót. Alapértelmezett modell a `qwen2.5-0.5b-instruct`. A beállítások induláskor ellenőrződnek. Alapértékük `max_new_tokens=512`, `do_sample=false`, `temperature=1.0`, `top_p=1.0`. A temperature és a top-p csak bekapcsolt mintavételezéskor kerül a modellnek átadott paraméterek közé.
+A modellkulcsot kell a `model_name` mezőben megadni, nem a Hugging Face azonosítót. Az egyetlen és alapértelmezett modell a `qwen2.5-0.5b-instruct`. A nyilvános modellt a Transformers tölti le a Hugging Face-ről; ehhez nem kell `HF_TOKEN`, viszont internetkapcsolat és helyi futtatási erőforrás szükséges. A beállítások induláskor ellenőrződnek. Alapértékük `max_new_tokens=512`, `do_sample=false`, `temperature=1.0`, `top_p=1.0`. A temperature és a top-p csak bekapcsolt mintavételezéskor kerül a modellnek átadott paraméterek közé.
 
 ### 5.3 Beágyazás és vektortár
 
@@ -258,11 +254,8 @@ Az előfeldolgozási kategória literáljai:
 | `DEFAULT_PROMPT_NAME` | `v1.1`; alapértelmezett promptazonosító. |
 | `DEFAULT_LLM_MODEL` | `qwen2.5-0.5b-instruct`; alapértelmezett API-modellkulcs. |
 | `QWEN2_5_MODEL_NAME` | `Qwen/Qwen2.5-0.5B-Instruct`; ha nincs megadva, `QWEN_MODEL_NAME` is használható. |
-| `QWEN2_MODEL_NAME` | `Qwen/Qwen2-0.5B-Instruct`. |
-| `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0`. |
-| `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct`. |
 | `LLM_MAX_NEW_TOKENS`, `LLM_DO_SAMPLE`, `LLM_TEMPERATURE`, `LLM_TOP_P` | Közös generálási alapértékek; rendre `512`, `false`, `1.0`, `1.0`. |
-| `QWEN2_5_*`, `QWEN2_5_1_5_*`, `QWEN2_*`, `LLAMA_TINY_*`, `LLAMA3_2_*` | Modellcsaládonként felülírható generálási változók: `_MAX_NEW_TOKENS`, `_DO_SAMPLE`, `_TEMPERATURE`, `_TOP_P`. |
+| `QWEN2_5_*` | A Qwen modellhez tartozó generálási változók: `_MAX_NEW_TOKENS`, `_DO_SAMPLE`, `_TEMPERATURE`, `_TOP_P`. |
 | `ZERO_SHOT_CLASSIFIER_MODEL` | `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. |
 | `RETRIEVAL_ENABLED` | `false`; retrieval bekapcsolása. |
 | `REFERENCE_DOCUMENTS_DIR` | Régi, OTP-re vonatkozó könyvtárbeállítás; elsődlegesen az `OTP_RULES_DIR` használandó. |
@@ -288,7 +281,7 @@ A korrelációs naplózás a kérés kezdetét/befejezését és a hibakódokat 
 - A `/health` nem függőség-ellenőrző readiness/liveness vizsgálat.
 - A személyes adatokat felismerő reguláris kifejezések nem teljes körűek; a request-fájl napló a nyers kérést is tárolja.
 - A modellminőség, magyar kategorizálási pontosság, válaszok tényszerűsége és jogi megfelelősége nincs elfogadási adatkészlettel igazolva.
-- A generáláshoz, NER-hez, osztályozáshoz és beágyazáshoz nincs általános, konfigurált inference-timeout; a `504` csak észlelt `TimeoutError` esetén keletkezik.
+- A HTTP-kérések alkalmazásszintű timeoutja 600 másodperc. Ez nem szakítja meg megbízhatóan a helyi, szinkron modellfuttatást; a generálás, NER, osztályozás vagy beágyazás tényleges `TimeoutError` kivétele ettől függetlenül `504` választ eredményezhet. Külső proxy vagy gateway ennél rövidebb timeoutot is alkalmazhat.
 - A modellletöltés, tárhely-, CPU/GPU-igény és válaszidő a futtatási környezettől függ. A betöltés és következtetés helyi Hugging Face/Transformers-függőségre épül.
 - A retrieval találata nem bizonyítja, hogy a generált válasz helyes; a token-F1 pedig csak szöveges egyezést jelez.
 - A besorolás szabályai heurisztikusak és sorrendérzékenyek; a zero-shot modell küszöbe, címkéi és pontossága üzleti validációt igényel.
