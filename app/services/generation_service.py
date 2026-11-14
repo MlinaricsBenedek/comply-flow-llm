@@ -334,6 +334,15 @@ class GenerationService:
         if not isinstance(response_plan, Mapping):
             raise ValueError("response_plan must be an object.")
 
+        # Normalize field names: snake_case -> camelCase for prompt compatibility
+        for snake_name, camel_name in [("decision", "ruleDecision"), ("reason", "ruleReason")]:
+            snake_value = prompt_input.get(snake_name)
+            camel_value = prompt_input.get(camel_name)
+            if snake_value is not None and camel_value is None:
+                prompt_input[camel_name] = snake_value
+            elif snake_value is not None and camel_value is not None and snake_value != camel_value:
+                raise ValueError(f"{snake_name} and {camel_name} must match.")
+
         validation_requirements = response_plan.get(
             "validation_requirements",
             response_plan.get("validationRequirements", {}),
