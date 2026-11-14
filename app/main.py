@@ -219,30 +219,66 @@ def create_app(
         
         # Validate all model configuration parameters early to catch invalid settings
         qwen2_5_params = _model_generation_parameters("QWEN2_5", generation_parameters)
+        qwen2_5_1_5_params = _model_generation_parameters("QWEN2_5_1_5", generation_parameters)
+        qwen2_params = _model_generation_parameters("QWEN2", generation_parameters)
+        llama_tiny_params = _model_generation_parameters("LLAMA_TINY", generation_parameters)
+        llama3_2_params = _model_generation_parameters("LLAMA3_2", generation_parameters)
         
-        # Always use Hugging Face Inference API for the default model
-        # This eliminates memory overhead and initialization time from local model loading
-        # Requires HF_TOKEN environment variable to be set
         default_model_name = os.getenv("DEFAULT_LLM_MODEL", "qwen2.5-0.5b-instruct")
-        
         hf_token = os.getenv("HF_TOKEN")
-        if not hf_token:
-            raise ValueError(
-                "HF_TOKEN environment variable must be set to use the Hugging Face Inference API. "
-                "Please set HF_TOKEN with your Hugging Face API token."
-            )
         
-        # Only create the default model using Inference API
-        # No local models are loaded to minimize memory usage
-        models = {
-            default_model_name: HuggingFaceInferenceAPIModel(
+        models = {}
+        
+        # Prefer Hugging Face Inference API if HF_TOKEN is set
+        # Otherwise, fall back to loading local models
+        if hf_token:
+            # Use Hugging Face Inference API for the default model
+            # This eliminates memory overhead and initialization time from local model loading
+            logger.info("Using Hugging Face Inference API for model inference")
+            models[default_model_name] = HuggingFaceInferenceAPIModel(
                 model_name=os.getenv(
                     "QWEN2_5_MODEL_NAME",
                     os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
                 ),
                 **qwen2_5_params,
             )
-        }
+        else:
+            # Fall back to local models if HF_TOKEN is not set
+            logger.warning("HF_TOKEN not set, falling back to local model loading")
+            models = {
+                "qwen2.5-0.5b-instruct": QwenModel(
+                    model_name=os.getenv(
+                        "QWEN2_5_MODEL_NAME",
+                        os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
+                    ),
+                    **qwen2_5_params,
+                ),
+                "qwen2.5-1.5b-instruct": QwenModel(
+                    model_name=os.getenv(
+                        "QWEN2_5_1_5_MODEL_NAME",
+                        "Qwen/Qwen2.5-1.5B-Instruct",
+                    ),
+                    **qwen2_5_1_5_params,
+                ),
+                "qwen2-0.5b-instruct": QwenModel(
+                    model_name=os.getenv(
+                        "QWEN2_MODEL_NAME", "Qwen/Qwen2-0.5B-Instruct"
+                    ),
+                    **qwen2_params,
+                ),
+                "llama-tiny-1.1b-chat": LlamaModel(
+                    model_name=os.getenv(
+                        "LLAMA_MODEL_NAME", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+                    ),
+                    **llama_tiny_params,
+                ),
+                "llama-3.2-1b-instruct": LlamaModel(
+                    model_name=os.getenv(
+                        "LLAMA3_2_MODEL_NAME", "meta-llama/Llama-3.2-1B-Instruct"
+                    ),
+                    **llama3_2_params,
+                ),
+            }
         
         default_model = default_model_name
         llm_service = LLMService(
@@ -497,10 +533,5 @@ def create_app(
     return application
 
 
-try:
-    app = create_app()
-except ValueError as e:
-    if "HF_TOKEN" in str(e):
-        app = None
-    else:
-        raise
+# Initialize the app with Inference API if available, otherwise with local models
+app = create_app()
