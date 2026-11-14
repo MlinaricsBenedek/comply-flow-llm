@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -17,7 +18,7 @@ from app.Preprocessing.state_builder import StateBuilder
 from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
 from app.api.routes.preprocessing import router as preprocessing_router
-from app.models.llm_model import LlamaModel, QwenModel
+from app.models.llm_model import LlamaModel, QwenModel, HuggingFaceInferenceAPIModel
 from app.Preprocessing.anonymizer import MessageAnonymizer
 from app.Preprocessing.classifier import MessageClassifier
 from app.Preprocessing.cleaner import MessageCleaner
@@ -73,9 +74,27 @@ def _log_api_error(
         "status_code": status_code,
         "error_code": code,
     }
+    cause = error
+    while cause is not None and cause.__cause__ is not None:
+        cause = cause.__cause__
     if error is not None:
-        extra["exception_type"] = type(error.__cause__ or error).__name__
-    log_method("api_error", extra=extra)
+        extra["exception_type"] = type(cause).__name__
+    model_name = getattr(request.state, "llm_model_name", None)
+    http_status = getattr(request.state, "llm_http_status", None)
+    if model_name is not None:
+        extra["model_name"] = model_name
+    if http_status is not None:
+        extra["model_http_status"] = http_status
+    log_method(
+        "api_error code=%s status=%s correlation_id=%s exception_type=%s model_name=%s model_http_status=%s",
+        code,
+        status_code,
+        extra["correlation_id"],
+        extra.get("exception_type", "none"),
+        extra.get("model_name", "none"),
+        extra.get("model_http_status", "none"),
+        extra=extra,
+    )
 
 
 def _read_bool_setting(name: str, default: bool) -> bool:
@@ -95,10 +114,22 @@ def _model_generation_parameters(
     prefix: str,
     defaults: dict[str, int | float | bool],
 ) -> dict[str, int | float | bool]:
+    import math
+    
     default_do_sample = defaults["do_sample"]
     if not isinstance(default_do_sample, bool):
         raise TypeError("do_sample default must be a boolean value.")
 
+    temperature = float(
+        os.getenv(f"{prefix}_TEMPERATURE", str(defaults["temperature"]))
+    )
+    if math.isnan(temperature) or math.isinf(temperature):
+        raise ValueError(f"{prefix}_TEMPERATURE must be a valid number, not 'nan' or 'inf'.")
+    
+    top_p = float(os.getenv(f"{prefix}_TOP_P", str(defaults["top_p"])))
+    if math.isnan(top_p) or math.isinf(top_p):
+        raise ValueError(f"{prefix}_TOP_P must be a valid number, not 'nan' or 'inf'.")
+    
     return {
         "max_new_tokens": int(
             os.getenv(f"{prefix}_MAX_NEW_TOKENS", str(defaults["max_new_tokens"]))
@@ -106,10 +137,8 @@ def _model_generation_parameters(
         "do_sample": _read_bool_setting(
             f"{prefix}_DO_SAMPLE", default_do_sample
         ),
-        "temperature": float(
-            os.getenv(f"{prefix}_TEMPERATURE", str(defaults["temperature"]))
-        ),
-        "top_p": float(os.getenv(f"{prefix}_TOP_P", str(defaults["top_p"]))),
+        "temperature": temperature,
+        "top_p": top_p,
     }
 
 
@@ -187,42 +216,39 @@ def create_app(
             "temperature": float(os.getenv("LLM_TEMPERATURE", "1.0")),
             "top_p": float(os.getenv("LLM_TOP_P", "1.0")),
         }
+        
+        # Validate all model configuration parameters early to catch invalid settings
+        qwen2_5_params = _model_generation_parameters("QWEN2_5", generation_parameters)
+        
+        # Always use Hugging Face Inference API for the default model
+        # This eliminates memory overhead and initialization time from local model loading
+        # Requires HF_TOKEN environment variable to be set
+        default_model_name = os.getenv("DEFAULT_LLM_MODEL", "qwen2.5-0.5b-instruct")
+        
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            raise ValueError(
+                "HF_TOKEN environment variable must be set to use the Hugging Face Inference API. "
+                "Please set HF_TOKEN with your Hugging Face API token."
+            )
+        
+        # Only create the default model using Inference API
+        # No local models are loaded to minimize memory usage
         models = {
-            "qwen2.5-0.5b-instruct": QwenModel(
+            default_model_name: HuggingFaceInferenceAPIModel(
                 model_name=os.getenv(
                     "QWEN2_5_MODEL_NAME",
                     os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
                 ),
-                **_model_generation_parameters("QWEN2_5", generation_parameters),
-            ),
-            "qwen2-0.5b-instruct": QwenModel(
-                model_name=os.getenv(
-                    "QWEN2_MODEL_NAME", "Qwen/Qwen2-0.5B-Instruct"
-                ),
-                **_model_generation_parameters("QWEN2", generation_parameters),
-            ),
-            "llama-tiny-1.1b-chat": LlamaModel(
-                model_name=os.getenv(
-                    "LLAMA_MODEL_NAME", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-                ),
-                **_model_generation_parameters("LLAMA_TINY", generation_parameters),
-            ),
-            "llama-3.2-1b-instruct": LlamaModel(
-                model_name=os.getenv(
-                    "LLAMA3_2_MODEL_NAME", "meta-llama/Llama-3.2-1B-Instruct"
-                ),
-                **_model_generation_parameters("LLAMA3_2", generation_parameters),
-            ),
+                **qwen2_5_params,
+            )
         }
-        default_model = os.getenv(
-            "DEFAULT_LLM_MODEL", "qwen2.5-0.5b-instruct"
-        )
+        
+        default_model = default_model_name
         llm_service = LLMService(
             models=models,
             default_model=default_model,
         )
-        for model_name in llm_service.available_models():
-            llm_service.model_configuration(model_name)
 
         default_prompt = os.getenv("DEFAULT_PROMPT_NAME", "v1.1")
         try:
@@ -248,6 +274,72 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Startup: Preload all models to avoid lazy-load timeout on first request
+        logger.info("model_warmup_starting")
+        warmup_start = __import__("time").perf_counter()
+        
+        if generation_service is not None and llm_service is not None:
+            # Preload only the default LLM model to reduce memory footprint
+            # Skip warmup for Inference API models (they don't need local initialization)
+            default_model = llm_service.default_model
+            llm_model = llm_service._models[default_model]
+            
+            if not isinstance(llm_model, HuggingFaceInferenceAPIModel):
+                try:
+                    model_start = __import__("time").perf_counter()
+                    config = llm_service.model_configuration(default_model)
+                    # Trigger lazy load by calling generate with minimal input
+                    llm_model.generate(".")
+                    model_time = __import__("time").perf_counter() - model_start
+                    logger.info(
+                        "model_warmup_complete",
+                        extra={"model": default_model, "duration_ms": int(model_time * 1000)},
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "model_warmup_failed",
+                        extra={"model": default_model, "error_type": type(error).__name__},
+                    )
+            else:
+                logger.info(
+                    "model_warmup_skipped",
+                    extra={"model": default_model, "reason": "using_hugging_face_inference_api"},
+                )
+            
+            # Preload NER model (if state_builder is configured)
+            if state_builder is not None:
+                try:
+                    ner_start = __import__("time").perf_counter()
+                    state_builder.extractor.ner_model.extract_entities(".")
+                    ner_time = __import__("time").perf_counter() - ner_start
+                    logger.info(
+                        "model_warmup_complete",
+                        extra={"model": "ner", "duration_ms": int(ner_time * 1000)},
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "model_warmup_failed",
+                        extra={"model": "ner", "error_type": type(error).__name__},
+                    )
+                
+                # Preload Classifier model
+                try:
+                    classifier_start = __import__("time").perf_counter()
+                    state_builder.classifier.classify(".")
+                    classifier_time = __import__("time").perf_counter() - classifier_start
+                    logger.info(
+                        "model_warmup_complete",
+                        extra={"model": "classifier", "duration_ms": int(classifier_time * 1000)},
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "model_warmup_failed",
+                        extra={"model": "classifier", "error_type": type(error).__name__},
+                    )
+        
+        warmup_total = __import__("time").perf_counter() - warmup_start
+        logger.info("model_warmup_finished", extra={"duration_ms": int(warmup_total * 1000)})
+        
         try:
             yield
         finally:
@@ -259,6 +351,34 @@ def create_app(
         version="1.0.0",
         lifespan=lifespan,
     )
+
+    @application.middleware("http")
+    async def timeout_middleware(request: Request, call_next):
+        """Enforce request timeout to prevent long-running operations from blocking."""
+        timeout_seconds = 60  # Matches typical upstream timeout (nginx, ALB)
+        try:
+            response = await asyncio.wait_for(call_next(request), timeout=timeout_seconds)
+            return response
+        except asyncio.TimeoutError:
+            correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+            logger.warning(
+                "api_request_timeout",
+                extra={
+                    "correlation_id": correlation_id,
+                    "path": request.url.path,
+                    "method": request.method,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+            return JSONResponse(
+                status_code=504,
+                headers={"X-Correlation-ID": correlation_id},
+                content={
+                    "error": "GATEWAY_TIMEOUT",
+                    "message": f"The request timed out after {timeout_seconds} seconds.",
+                    "correlation_id": correlation_id,
+                },
+            )
 
     @application.middleware("http")
     async def log_api_request(request: Request, call_next):
@@ -377,4 +497,10 @@ def create_app(
     return application
 
 
-app = create_app()
+try:
+    app = create_app()
+except ValueError as e:
+    if "HF_TOKEN" in str(e):
+        app = None
+    else:
+        raise

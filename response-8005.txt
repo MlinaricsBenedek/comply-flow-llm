@@ -1,0 +1,1 @@
+{"success":false,"error":{"code":"VALIDATION_ERROR","message":"The request has an invalid structure or field value.","correlation_id":"582a4a8b-cd80-45b5-a8b8-141aa06af078","details":[{"field":"body.1","code":"json_invalid"}]}}

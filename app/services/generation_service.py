@@ -1,13 +1,18 @@
 import json
+import logging
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from unicodedata import normalize
 
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
 from app.services.retriever import RetrievedSource
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -23,17 +28,29 @@ class GenerationService:
     _placeholder_pattern = re.compile(r"{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}")
     _word_pattern = re.compile(r"\w+", re.UNICODE)
     _field_name_pattern = re.compile(r"[_\-\s]+")
+    _percentage_pattern = re.compile(
+        r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s*(?:%|százalék\w*)",
+        re.IGNORECASE,
+    )
     _internal_heading_pattern = re.compile(
+        r"(?:\b(?:döntési javaslat|a döntés indoka|alkalmazott szabályok|"
+        r"választerv|részletes szabályeredmény|visszakeresett dokumentumkontextus|"
+        r"válaszellenőrzési követelmények)\s*:|"
         r"^\s*(?:#{1,6}\s*)?(?:döntési javaslat|a döntés indoka|"
-        r"alkalmazott szabályok|választerv|visszakeresett dokumentumkontextus)"
-        r"(?:\s*:|[ \t]*$)",
+        r"alkalmazott szabályok|választerv|részletes szabályeredmény|"
+        r"visszakeresett dokumentumkontextus|"
+        r"válaszellenőrzési követelmények)[ \t]*$)",
         re.IGNORECASE | re.MULTILINE,
     )
     _internal_instruction_pattern = re.compile(
         r"magyar\s+ügyfélszolgálati\s+munkatárs\s+vagy|"
-        r"az\s+ügyfél\s+üzenete\s*:",
+        r"az\s+ügyfél\s+üzenete\s*:|"
+        r"magyarul\s+válaszolj|"
+        r"kérdezz\s+rá\s+a\s+számlatípusra",
         re.IGNORECASE,
     )
+    _markdown_heading_pattern = re.compile(r"(?m)^\s*#{1,6}\s+\S")
+    _bold_label_pattern = re.compile(r"(?m)^\s*\*\*[^*\n]+\*\*\s*:")
     _response_plan_json_pattern = re.compile(
         r"""["'](?:tone|language)["']\s*:""",
         re.IGNORECASE,
@@ -155,6 +172,7 @@ class GenerationService:
             self._response_instructions(input_data),
         )
         response = ""
+        invalid_response = False
         for attempt in range(2):
             prompt = final_prompt
             if attempt:
@@ -167,25 +185,29 @@ class GenerationService:
                     final_prompt,
                     response,
                     missing_requirements,
+                    invalid_response,
                 )
 
             generated_response = self.llm_service.execute(prompt, model_configuration)
-            if not isinstance(generated_response, str) or not generated_response.strip():
-                response = self._fallback_response(decision_kind)
-                break
-
-            response = generated_response.strip()
-            if (
-                self._contains_internal_prompt_content(response)
+            response = generated_response.strip() if isinstance(generated_response, str) else ""
+            invalid_response = (
+                not response
+                or self._contains_internal_prompt_content(response)
+                or self._contains_decision_identifier(response, prompt_input)
+                or self._contains_unsupported_percentage(response, prompt_input)
                 or self._contains_customer_message_echo(response, input_data)
                 or self._contains_unsupported_decision(response, input_data)
                 or not self._matches_decision(response, decision_kind)
+            )
+            if not invalid_response and not self._missing_requirements(
+                response, required_phrases, required_facts
             ):
-                response = self._fallback_response(decision_kind)
-                break
-            if not self._missing_requirements(response, required_phrases, required_facts):
                 break
         else:
+            logger.warning(
+                "generation_response_validation_failed",
+                extra={"decision_kind": decision_kind, "model_name": model_configuration.model_name},
+            )
             response = self._fallback_response(decision_kind)
 
         return GenerationResult(
@@ -311,6 +333,8 @@ class GenerationService:
                     cls._negative_verdict_pattern.sub("", response)
                 )
             )
+        if decision_kind == "guidance":
+            return not cls._complaint_verdict_pattern.search(response)
         return True
 
     @classmethod
@@ -376,6 +400,10 @@ class GenerationService:
                 missing_facts.append(field_name)
 
         prompt_input["responsePlan"] = response_plan
+        prompt_input.setdefault(
+            "ruleResult",
+            prompt_input.get("rule_result", {}),
+        )
         prompt_input["validationRequirements"] = cls._format_validation_requirements(
             required_phrases,
             required_facts,
@@ -512,12 +540,22 @@ class GenerationService:
         original_prompt: str,
         previous_response: str,
         missing_requirements: list[str],
+        invalid_response: bool = False,
     ) -> str:
+        validation_feedback = (
+            "Az előző válasz nem megfelelő: ne ismételd meg a belső mezőket "
+            "vagy az ügyfél teljes üzenetét, ne használj nem alátámasztott "
+            "százalékot, ne adj címsort vagy belső utasítást, és ne változtasd "
+            "meg a döntés irányát.\n"
+            if invalid_response
+            else ""
+        )
         return (
             f"{original_prompt}\n\n"
             "Javítsd az előző választ úgy, hogy az ügyfélnek szóló szöveg "
             "természetes maradjon, de az alábbi elemek szó szerint szerepeljenek "
             "benne. Ne adj hozzá kitalált adatot.\n"
+            f"{validation_feedback}"
             f"Hiányzó elemek: {json.dumps(missing_requirements, ensure_ascii=False)}\n"
             f"Előző válasz: {previous_response}\n"
             "Csak a javított, ügyfélnek szóló választ add vissza."
@@ -528,12 +566,32 @@ class GenerationService:
         template: str,
         input_data: Mapping[str, object],
     ) -> str:
+        # Filter to only required placeholders to reduce token count
+        # This avoids passing unnecessary fields to the LLM model
+        required_placeholders = {
+            "customerMessage",
+            "caseType",
+            "structuredCaseState",
+            "ruleDecision",
+            "ruleReason",
+            "matchedRules",
+            "ruleResult",
+            "retrievedContext",
+            "validationRequirements",
+        }
+
+        filtered_input = {
+            k: v for k, v in input_data.items()
+            if k in required_placeholders
+        }
+
         def replace_placeholder(match: re.Match[str]) -> str:
             key = match.group(1)
-            if key not in input_data:
+            if key not in filtered_input:
+                # Preserve original error behavior: require all placeholders
                 raise ValueError(f"Missing prompt input: {key}")
 
-            value = input_data[key]
+            value = filtered_input[key]
             if value is None:
                 return "Not provided"
             if isinstance(value, (dict, list, tuple)):
@@ -547,6 +605,8 @@ class GenerationService:
         if (
             cls._internal_heading_pattern.search(response)
             or cls._internal_instruction_pattern.search(response)
+            or cls._markdown_heading_pattern.search(response)
+            or cls._bold_label_pattern.search(response)
             or cls._response_plan_json_pattern.search(response)
             or cls._table_pattern.search(response)
             or cls._extracted_field_pattern.search(response)
@@ -571,6 +631,68 @@ class GenerationService:
             if isinstance(parsed, (dict, list)):
                 return True
         return False
+
+    @classmethod
+    def _contains_decision_identifier(
+        cls,
+        response: str,
+        input_data: Mapping[str, object],
+    ) -> bool:
+        for key in ("ruleDecision", "decision"):
+            decision = input_data.get(key)
+            if (
+                isinstance(decision, str)
+                and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", decision)
+                and ("_" in decision or any(char.isupper() for char in decision[1:]))
+                and re.search(rf"(?<!\w){re.escape(decision)}(?!\w)", response, re.IGNORECASE)
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _contains_unsupported_percentage(
+        cls,
+        response: str,
+        input_data: Mapping[str, object],
+    ) -> bool:
+        def percentages(value: object) -> set[Decimal]:
+            if isinstance(value, str):
+                return {
+                    Decimal(match.group(1).replace(",", "."))
+                    for match in cls._percentage_pattern.finditer(value)
+                }
+            if isinstance(value, Mapping):
+                result: set[Decimal] = set()
+                for key, child in value.items():
+                    result.update(percentages(child))
+                    if (
+                        isinstance(key, str)
+                        and cls._normalize_field_name(key).endswith("percent")
+                        and isinstance(child, (int, float))
+                        and not isinstance(child, bool)
+                    ):
+                        result.add(Decimal(str(child)))
+                return result
+            if isinstance(value, (list, tuple)):
+                return {item for child in value for item in percentages(child)}
+            return set()
+
+        generated = percentages(response)
+        if not generated:
+            return False
+        evidence = percentages([
+            input_data.get(key)
+            for key in (
+                "customerMessage",
+                "cleanedText",
+                "case_state",
+                "caseState",
+                "structuredCaseState",
+                "ruleResult",
+                "retrievedContext",
+            )
+        ])
+        return not generated.issubset(evidence)
 
     @classmethod
     def _contains_customer_message_echo(

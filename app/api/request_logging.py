@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ class RequestFileLoggingMiddleware:
         body_chunks: list[bytes] = []
         response_status: int | None = None
         correlation_id: str | None = None
+        cancelled = False
 
         async def receive_and_capture() -> dict[str, Any]:
             message = await receive()
@@ -42,6 +44,23 @@ class RequestFileLoggingMiddleware:
 
         try:
             await self.app(scope, receive_and_capture, send_and_capture)
+        except asyncio.CancelledError:
+            cancelled = True
+            request_id = correlation_id or scope.get("state", {}).get("correlation_id")
+            logger.warning(
+                "api_request_cancelled correlation_id=%s method=%s path=%s",
+                request_id or "none",
+                scope["method"],
+                scope["path"],
+                extra={
+                    "correlation_id": request_id,
+                    "operation": f'{scope["method"]} {scope["path"]}',
+                },
+            )
+            raise
+        except Exception as middleware_error:
+            logger.error(f"Middleware error in app call: {middleware_error}", exc_info=True)
+            raise
         finally:
             body = b"".join(body_chunks)
             try:
@@ -67,7 +86,10 @@ class RequestFileLoggingMiddleware:
                 "content_type": content_type,
                 "request_body": body_value,
                 "status_code": response_status,
-                "correlation_id": correlation_id,
+                "correlation_id": (
+                    correlation_id or scope.get("state", {}).get("correlation_id")
+                ),
+                "cancelled": cancelled,
             }
             try:
                 self._append_record(record)
@@ -76,6 +98,8 @@ class RequestFileLoggingMiddleware:
                     "request_file_log_write_failed",
                     extra={"log_file": str(self.log_file)},
                 )
+            except Exception as logging_error:
+                logger.error(f"Error in request logging: {logging_error}", exc_info=True)
 
     def _append_record(self, record: dict[str, Any]) -> None:
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))

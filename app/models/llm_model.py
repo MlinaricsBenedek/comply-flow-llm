@@ -1,5 +1,7 @@
 from threading import Lock
 from typing import Any
+import os
+import httpx
 
 
 class HuggingFaceChatModel:
@@ -99,6 +101,72 @@ class HuggingFaceChatModel:
 		return self._tokenizer, self._model
 
 
+class HuggingFaceInferenceAPIModel:
+	"""Model that uses Hugging Face Inference API instead of loading locally.
+	
+	This approach avoids memory overhead and long initialization times.
+	Requires HF_TOKEN environment variable to be set.
+	"""
+	
+	def __init__(
+		self,
+		model_name: str,
+		max_new_tokens: int = 512,
+		do_sample: bool = False,
+		temperature: float = 1.0,
+		top_p: float = 1.0,
+	) -> None:
+		if max_new_tokens <= 0:
+			raise ValueError("max_new_tokens must be greater than zero.")
+		if temperature <= 0:
+			raise ValueError("temperature must be greater than zero.")
+		if not 0 < top_p <= 1:
+			raise ValueError("top_p must be greater than zero and at most one.")
+
+		self.model_name = model_name
+		self.max_new_tokens = max_new_tokens
+		self.do_sample = do_sample
+		self.temperature = temperature
+		self.top_p = top_p
+		self._api_token = os.getenv("HF_TOKEN")
+		if not self._api_token:
+			raise ValueError("HF_TOKEN environment variable must be set to use Hugging Face Inference API.")
+
+	def generate(
+		self,
+		prompt: str,
+		**generation_parameters: int | float | bool,
+	) -> str:
+		if not prompt.strip():
+			raise ValueError("Prompt must not be empty.")
+
+		max_new_tokens = generation_parameters.get("max_new_tokens", self.max_new_tokens)
+		do_sample = generation_parameters.get("do_sample", self.do_sample)
+		temperature = generation_parameters.get("temperature", self.temperature)
+		top_p = generation_parameters.get("top_p", self.top_p)
+
+		url = f"https://api-inference.huggingface.co/models/{self.model_name}"
+		headers = {"Authorization": f"Bearer {self._api_token}"}
+		payload = {
+			"inputs": prompt,
+			"parameters": {
+				"max_new_tokens": max_new_tokens,
+				"do_sample": do_sample,
+				"temperature": temperature,
+				"top_p": top_p,
+			},
+		}
+
+		response = httpx.post(url, json=payload, headers=headers, timeout=60.0)
+		response.raise_for_status()
+		
+		result = response.json()
+		if isinstance(result, list) and len(result) > 0:
+			return result[0].get("generated_text", "").strip()
+		
+		return ""
+
+
 class QwenModel(HuggingFaceChatModel):
 	def __init__(
 		self,
@@ -121,3 +189,4 @@ class LlamaModel(HuggingFaceChatModel):
 		top_p: float = 1.0,
 	) -> None:
 		super().__init__(model_name, max_new_tokens, do_sample, temperature, top_p)
+

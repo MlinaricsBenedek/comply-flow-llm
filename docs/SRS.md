@@ -105,9 +105,11 @@ A szabályok többek között tranzakciós illetékre, megtakarításokra és ka
 
 A prompt alapértelmezése `v1.1`, illetve a `DEFAULT_PROMPT_NAME` környezeti változóval módosítható. A fájl kiterjesztés nélküli neve a prompt azonosítója. A `{{ kulcs }}` változóhoz hiányzó bemeneti kulcs érvénytelen generálási bemenet; a `null` érték `Not provided` szöveggé alakul. A lista-, tuple- és szótárértékek olvasható JSON-ként kerülnek a promptba, más értékek szöveges formára alakítódnak.
 
+A `v1.1` prompt a részletes `rule_result` / `ruleResult` objektumot is megkapja, és az ügy lényeges adataira, valamint az alátámasztott feltételekre építő választ kér. A kimeneti ellenőrzés visszautasítja a döntésazonosító és a rendelkezésre álló bemeneti vagy forrásadatokban nem szereplő százalékérték kiírását. Az egyező szám önmagában nem igazolja az állítás helyességét vagy a forrás alkalmazhatóságát.
+
 A `ClaimValid` és `ClaimInvalid` döntés a promptban egyértelmű pozitív, illetve negatív irányt ad az LLM-nek. A `BankTransferFeesGuidance` tájékoztatási útvonal: nem jelent jogos/jogtalan döntést, az LLM-nek a választerv utasításait kell követnie. A nem értékelt vagy ismeretlen döntés, illetve egyéb döntés hiányában az `OTHER` kategória semleges, ügyfélnek szóló választ ad LLM-hívás nélkül; ez sikeres `200` válasz, `model_name: null` és üres `model_parameters` mezőkkel. Az ilyen ág nem állítja, hogy a követelés helyes vagy helytelen.
 
-A modell által visszaadott üres, belső formátumú, az ügyfél teljes üzenetét visszamondó vagy előírt tartalmat kihagyó szöveg helyett a szolgáltatás az adott döntési ághoz illő semleges vagy döntésszöveget ad vissza `200` válaszként. Az LLM tényleges futtatási vagy elérhetőségi hibája továbbra is `503 LLM_UNAVAILABLE`; a `503` nem használatos pusztán azért, mert a modell válasza nem ügyfélnek való. A kimeneti ellenőrzések heurisztikusak, nem garantálják a modell minden tartalmi hibájának felismerését.
+A modell által visszaadott üres, belső formátumú, az ügyfél teljes üzenetét visszamondó, a döntéssel ellentétes vagy előírt tartalmat kihagyó szöveg esetén a szolgáltatás egyszer javító generálást kér. Ha ez sem megfelelő, figyelmeztetést naplóz, és az adott döntési ághoz illő semleges vagy döntésszöveget ad vissza `200` válaszként. Az LLM tényleges futtatási vagy elérhetőségi hibája továbbra is `503 LLM_UNAVAILABLE`; a `503` nem használatos pusztán azért, mert a modell válasza nem ügyfélnek való. A kimeneti ellenőrzések heurisztikusak, nem garantálják a modell minden tartalmi hibájának felismerését.
 
 ### 3.6 Dokumentum-visszakeresés
 
@@ -177,7 +179,7 @@ Minden végpont ugyanazt a korrelációs azonosítót használja a válasz `X-Co
 | `model_parameters` | objektum vagy `null` | Generálási paraméter-felülírások: `max_new_tokens`, `do_sample`, `temperature`, `top_p`. |
 | `reference_answer` | nem üres sztring vagy `null` | Opcionális token-F1 összehasonlításhoz; nem kerül a promptba. |
 
-Az `input_data.response_plan` (vagy kompatibilitási okból `responsePlan`) opcionális objektum. A benne érkező `validation_requirements` (vagy `validationRequirements`) objektum vagy `null`; hiányzó vagy `null` érték esetén nincs külön válaszellenőrzési követelmény. Objektum esetén a `requiredPhrases` mező nem üres sztringek listája; minden elemet a generált válasznak szó szerint tartalmaznia kell. A `requiredFacts` mező sztringlistában adja meg az elvárt ténymezőket. A Python ezeket a `case_state`, `caseState`, `facts` és `structuredCaseState` objektumokban keresi; a megtalált értékeknek változatlanul szerepelniük kell a válaszban. Ha egy mezőhöz nincs érték, a modellnek nem szabad kitalálnia: vissza kell kérdeznie vagy jeleznie kell az adat hiányát. A Python egy hiányos kimenet után egyszer javító generálást próbál, és ha továbbra is hiányzik kötelező kifejezés vagy elérhető tényérték, `503 LLM_UNAVAILABLE` hibát ad. A sikeres válasz szerkezete változatlan, továbbra is a `response` szövegmezőt tartalmazza.
+Az `input_data.response_plan` (vagy kompatibilitási okból `responsePlan`) opcionális objektum. A benne érkező `validation_requirements` (vagy `validationRequirements`) objektum vagy `null`; hiányzó vagy `null` érték esetén nincs külön válaszellenőrzési követelmény. Objektum esetén a `requiredPhrases` mező nem üres sztringek listája; minden elemet a generált válasznak szó szerint tartalmaznia kell. A `requiredFacts` mező sztringlistában adja meg az elvárt ténymezőket. A Python ezeket a `case_state`, `caseState`, `facts` és `structuredCaseState` objektumokban keresi; a megtalált értékeknek változatlanul szerepelniük kell a válaszban. Ha egy mezőhöz nincs érték, a modellnek nem szabad kitalálnia: vissza kell kérdeznie vagy jeleznie kell az adat hiányát. A Python egy hiányos kimenet után egyszer javító generálást próbál; ha továbbra is hiányzik kötelező kifejezés vagy elérhető tényérték, figyelmeztetést naplóz és fallback választ ad. A fallback nem garantálja az előírt kifejezések vagy tényértékek szerepeltetését.
 
 Legalább a `message` vagy az `input_data` szükséges. Ha mindkettő érkezik, a szolgáltatás a .NET-kliensek szerződése szerint a tisztított `message`-et az `input_data`-ból normalizált kontextussal együtt használja, és nem indít szerveroldali előfeldolgozást. A `case_state.category`, `decision`, `reason`, `rule_result.decision`, `bank`, `facts` és `category` értékek a 3.4. szakasz szerint a promptkontextusba képeződnek. A kérés ismeretlen legfelső szintű mezője validációs hibát ad. A `model_parameters` objektum ismeretlen paramétere a szolgáltatási validáció során `400 MODEL_PARAMETERS_INVALID` hibát ad.
 
@@ -202,7 +204,7 @@ A token-F1 a kis-/nagybetűtől független, NFKC-normalizált szavak multihalmaz
 | `503` | `GENERATION_UNAVAILABLE` | Generálási szolgáltatás nincs konfigurálva. |
 | `503` | `PREPROCESSING_UNAVAILABLE` / `PREPROCESSING_INCOMPLETE` | `message` alapú generálásnál nincs pipeline, vagy az előfeldolgozás nem teljes. |
 | `503` | `RETRIEVAL_UNAVAILABLE` | A retrieval hibás vagy nem érhető el. |
-| `503` | `LLM_UNAVAILABLE` | A modell nem tudta kiszolgálni a kérést, vagy az eredménye nem fogadható el ügyfélválaszként. |
+| `503` | `LLM_UNAVAILABLE` | A modell nem tudta kiszolgálni a kérést. |
 | `504` | `PREPROCESSING_TIMEOUT`, `RETRIEVAL_TIMEOUT` vagy `GENERATION_TIMEOUT` | Az adott művelet `TimeoutError`-ral állt le. |
 | `500` | `INTERNAL_SERVER_ERROR` | Nem várt belső hiba. |
 
@@ -223,6 +225,7 @@ Az LLM-modellek közös `HuggingFaceChatModel` adaptert használnak. A Hugging F
 | API-modellkulcs | Alapértelmezett Hugging Face modellazonosító |
 |---|---|
 | `qwen2.5-0.5b-instruct` | `Qwen/Qwen2.5-0.5B-Instruct` |
+| `qwen2.5-1.5b-instruct` | `Qwen/Qwen2.5-1.5B-Instruct` |
 | `qwen2-0.5b-instruct` | `Qwen/Qwen2-0.5B-Instruct` |
 | `llama-tiny-1.1b-chat` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
 | `llama-3.2-1b-instruct` | `meta-llama/Llama-3.2-1B-Instruct` |
@@ -259,7 +262,7 @@ Az előfeldolgozási kategória literáljai:
 | `LLAMA_MODEL_NAME` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0`. |
 | `LLAMA3_2_MODEL_NAME` | `meta-llama/Llama-3.2-1B-Instruct`. |
 | `LLM_MAX_NEW_TOKENS`, `LLM_DO_SAMPLE`, `LLM_TEMPERATURE`, `LLM_TOP_P` | Közös generálási alapértékek; rendre `512`, `false`, `1.0`, `1.0`. |
-| `QWEN2_5_*`, `QWEN2_*`, `LLAMA_TINY_*`, `LLAMA3_2_*` | Modellcsaládonként felülírható generálási változók: `_MAX_NEW_TOKENS`, `_DO_SAMPLE`, `_TEMPERATURE`, `_TOP_P`. |
+| `QWEN2_5_*`, `QWEN2_5_1_5_*`, `QWEN2_*`, `LLAMA_TINY_*`, `LLAMA3_2_*` | Modellcsaládonként felülírható generálási változók: `_MAX_NEW_TOKENS`, `_DO_SAMPLE`, `_TEMPERATURE`, `_TOP_P`. |
 | `ZERO_SHOT_CLASSIFIER_MODEL` | `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. |
 | `RETRIEVAL_ENABLED` | `false`; retrieval bekapcsolása. |
 | `REFERENCE_DOCUMENTS_DIR` | Régi, OTP-re vonatkozó könyvtárbeállítás; elsődlegesen az `OTP_RULES_DIR` használandó. |
@@ -277,7 +280,7 @@ A promptkönyvtárnak léteznie kell, legalább egy nem üres `.txt` fájlt kell
 
 Az alkalmazás nem tárol ügyfélügyeket vagy generálási eredményeket adatbázisban. A ChromaDB tartósan referencia-dokumentumrészleteket és beágyazásokat tárol.
 
-A korrelációs naplózás a kérés kezdetét/befejezését és a hibakódokat rögzíti. Emellett a `RequestFileLoggingMiddleware` alapértelmezés szerint JSONL-fájlba írja a HTTP-kérések törzsét is (`request_body`), a metódussal, útvonallal, query stringgel, státusszal és korrelációs azonosítóval együtt; választestet nem ír. Ezért a nyers, még anonimizálatlan ügyfélüzenet is bekerülhet a kérésnaplóba. A fájl elérési útja `REQUEST_LOG_FILE` változóval állítható, és a napló megőrzését, hozzáférését, törlését, illetve adatvédelmi kezelését az üzemeltetőnek kell meghatároznia.
+A korrelációs naplózás a kérés kezdetét/befejezését és a hibakódokat rögzíti. Emellett a `RequestFileLoggingMiddleware` alapértelmezés szerint JSONL-fájlba írja a HTTP-kérések törzsét is (`request_body`), a metódussal, útvonallal, query stringgel, státusszal és korrelációs azonosítóval együtt; választestet nem ír. A megszakított ASGI-kérés `api_request_cancelled` figyelmeztetést és `cancelled: true` mezőt kap, a még el nem küldött státusz `null`; a megszakítás továbbterjed, nem jelent automatikus szinkron modellmegszakítást. Ezért a nyers, még anonimizálatlan ügyfélüzenet is bekerülhet a kérésnaplóba. A fájl elérési útja `REQUEST_LOG_FILE` változóval állítható, és a napló megőrzését, hozzáférését, törlését, illetve adatvédelmi kezelését az üzemeltetőnek kell meghatároznia.
 
 ## 7. Nem funkcionális korlátok és nyitott kérdések
 

@@ -1,5 +1,6 @@
 from dataclasses import asdict
 
+import httpx
 from fastapi import APIRouter, Request
 
 from app.api.errors import APIError, APIErrorResponse
@@ -161,8 +162,38 @@ def generate_response(
         input_data["retrievedContext"] = (
             generation_service.format_retrieved_context(retrieved_sources)
         )
+        
+        # Filter input_data to only required fields to reduce token count and improve performance
+        required_fields = {
+            "customerMessage",
+            "caseType",
+            "structuredCaseState",
+            "ruleDecision",
+            "ruleReason",
+            "matchedRules",
+            "ruleResult",
+            "retrievedContext",
+            "validationRequirements",
+            "cleanedText",
+            "category",
+            "bank",
+            # Additional fields needed by generation service methods
+            "response_plan",
+            "responsePlan",
+            "rule_result",
+            "decision",
+            # Fields needed by _prepare_prompt_input
+            "case_state",
+            "caseState",
+            "facts",
+        }
+        filtered_input_data = {
+            k: v for k, v in input_data.items()
+            if k in required_fields and v is not None
+        }
+        
         result = generation_service.generate_result(
-            input_data,
+            filtered_input_data,
             prompt_name=payload.prompt_name,
             model_name=payload.model_name,
             model_parameters=(
@@ -182,7 +213,22 @@ def generate_response(
     except ValueError as error:
         raise APIError(400, "GENERATION_INPUT_INVALID", "The generation input is invalid.") from error
     except ModelExecutionError as error:
-        raise APIError(503, "LLM_UNAVAILABLE", "The language model is temporarily unavailable.") from error
+        request.state.llm_model_name = (
+            payload.model_name or generation_service.llm_service.default_model
+        )
+        message = "The language model is temporarily unavailable."
+        cause = error.__cause__
+        while cause is not None:
+            if isinstance(cause, httpx.HTTPStatusError):
+                request.state.llm_http_status = cause.response.status_code
+                if cause.response.status_code in {401, 403, 404}:
+                    message = (
+                        "The selected language model could not be accessed. "
+                        "Check model access, authentication, and the local model cache."
+                    )
+                break
+            cause = cause.__cause__
+        raise APIError(503, "LLM_UNAVAILABLE", message) from error
 
     return GenerationResponse(
         response=result.response,

@@ -90,10 +90,19 @@ class APIWorkflowTests(unittest.TestCase):
             prompt_service=FakePromptService(),
             llm_service=LLMService({"fake-model": self.model}, "fake-model"),
         )
+        # Ensure RETRIEVAL_ENABLED is false for all tests unless explicitly set
+        self._retrieval_enabled_before = os.environ.pop("RETRIEVAL_ENABLED", None)
         self.app = create_app(
             state_builder=FakeStateBuilder(),
             generation_service=self.generation_service,
+            retrieval_enabled=False,
         )
+
+    def tearDown(self) -> None:
+        if self._retrieval_enabled_before is not None:
+            os.environ["RETRIEVAL_ENABLED"] = self._retrieval_enabled_before
+        else:
+            os.environ.pop("RETRIEVAL_ENABLED", None)
 
     def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         async def send_request() -> httpx.Response:
@@ -586,6 +595,7 @@ class APIWorkflowTests(unittest.TestCase):
             "ruleDecision": "not_evaluated",
             "ruleReason": "No rule-engine decision is available.",
             "matchedRules": [],
+            "ruleResult": {},
             "retrievedContext": "Nincs kellően releváns dokumentumrészlet.",
             "responsePlan": {},
             "validationRequirements": "Nincs külön válaszellenőrzési követelmény.",
@@ -615,6 +625,7 @@ class APIWorkflowTests(unittest.TestCase):
                 "ruleDecision",
                 "ruleReason",
                 "matchedRules",
+                "ruleResult",
                 "retrievedContext",
                 "validationRequirements",
             },
@@ -1037,6 +1048,203 @@ class APIWorkflowTests(unittest.TestCase):
             self.model.prompt,
         )
         self.assertIn("nem állapítja meg", self.model.prompt)
+
+    def test_guidance_retries_inline_prompt_leak_and_returns_corrected_answer(self) -> None:
+        responses = iter([
+            "A döntési javaslat: BankTransferFeesGuidance. Alkalmazott szabályok: [].",
+            "A díj ellenőrzéséhez kérjük, forduljon az ügyfélszolgálathoz.",
+        ])
+        prompts = []
+
+        def generate(prompt: str, **parameters: object) -> str:
+            prompts.append(prompt)
+            return next(responses)
+
+        self.model.generate = generate
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Panasz az átutalási díj miatt.",
+                    "decision": "BankTransferFeesGuidance",
+                    "reason": "Díjtájékoztatás",
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["response"],
+            "A díj ellenőrzéséhez kérjük, forduljon az ügyfélszolgálathoz.",
+        )
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Az előző válasz nem megfelelő", prompts[1])
+
+    def test_guidance_receives_rule_assessment_and_uses_supported_rate(self) -> None:
+        class FeeRetriever:
+            def retrieve(self, **kwargs: object) -> list[RetrievedSource]:
+                return [
+                    RetrievedSource(
+                        document_name="notice.txt",
+                        chunk_index=0,
+                        text="A díj mértéke 0,3%.",
+                        start_char=0,
+                        end_char=20,
+                        similarity=0.9,
+                    )
+                ]
+
+        self.model.response = "Az átutalás díja a hirdetmény szerint 0,3%."
+        self.generation_service = GenerationService(
+            prompt_service=PromptService(prompt_dir=DEFAULT_PROMPT_DIR),
+            llm_service=self.generation_service.llm_service,
+        )
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            generation_service=self.generation_service,
+            retriever=FeeRetriever(),
+        )
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "message": "Panasz az átutalási díj miatt.",
+                "category": "BANK_TRANSFER_FEES",
+                "facts": {"PRICE": ["168 000 Ft", "750 Ft", "400 Ft"]},
+                "input_data": {
+                    "decision": "BankTransferFeesGuidance",
+                    "rule_result": {
+                        "decision": "BankTransferFeesGuidance",
+                        "transferFeeAssessment": {"ratePercent": 0.3},
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["response"], self.model.response)
+        self.assertEqual(len(response.json()["sources"]), 1)
+        self.assertIn('"transferFeeAssessment"', self.model.prompt)
+        self.assertIn('"ratePercent": 0.3', self.model.prompt)
+        self.assertIn("168 000 Ft", self.model.prompt)
+        self.assertIn("A díj mértéke 0,3%.", self.model.prompt)
+
+    def test_guidance_rejects_decision_identifier_and_unsupported_percentage(self) -> None:
+        for invalid_response in (
+            "A panasz a BankTransferFeesGuidance döntési javaslat.",
+            "Az átutalás díja 99%.",
+        ):
+            with self.subTest(invalid_response=invalid_response):
+                responses = iter([
+                    invalid_response,
+                    "Kérjük, ellenőrizze a díjat a hirdetmény alapján.",
+                ])
+                self.model.generate = lambda prompt, **parameters: next(responses)
+                response = self.request(
+                    "POST",
+                    "/generate",
+                    json={
+                        "input_data": {
+                            "customerMessage": "Panasz az átutalási díj miatt.",
+                            "decision": "BankTransferFeesGuidance",
+                            "rule_result": {
+                                "transferFeeAssessment": {"ratePercent": 0.3}
+                            },
+                        }
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    response.json()["response"],
+                    "Kérjük, ellenőrizze a díjat a hirdetmény alapján.",
+                )
+
+    def test_guidance_accepts_percentage_from_numeric_rule_assessment(self) -> None:
+        self.model.response = "Az alkalmazott díjmérték 0,30%."
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "input_data": {
+                    "customerMessage": "Panasz az átutalási díj miatt.",
+                    "decision": "BankTransferFeesGuidance",
+                    "rule_result": {
+                        "transferFeeAssessment": {"ratePercent": 0.3}
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["response"], self.model.response)
+
+    def test_guidance_retries_unsupported_verdict_and_then_falls_back(self) -> None:
+        self.model.response = "A panasz jogos."
+
+        with self.assertLogs("app.services.generation_service", level="WARNING") as logs:
+            response = self.request(
+                "POST",
+                "/generate",
+                json={
+                    "input_data": {
+                        "customerMessage": "Panasz az átutalási díj miatt.",
+                        "ruleDecision": "BankTransferFeesGuidance",
+                    }
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("A panasz jogos.", response.json()["response"])
+        self.assertIn("nem tudom", response.json()["response"])
+        self.assertIn("generation_response_validation_failed", logs.output[0])
+
+    def test_model_failure_logs_root_exception_type_and_correlation_id(self) -> None:
+        self.model.failure = OSError("private model cache path")
+
+        with self.assertLogs("app.main", level="ERROR") as logs:
+            response = self.request(
+                "POST",
+                "/generate",
+                headers={"X-Correlation-ID": "test-model-failure"},
+                json={"message": "hello", "rule_decision": "provide_information"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertIn("exception_type=OSError", logs.output[0])
+        self.assertIn("correlation_id=test-model-failure", logs.output[0])
+        self.assertNotIn("private model cache path", logs.output[0])
+        self.assertNotIn("private model cache path", response.text)
+
+    def test_model_access_failure_reports_actionable_error_without_private_details(self) -> None:
+        request = httpx.Request("GET", "https://example.invalid/private-model?token=secret")
+        http_response = httpx.Response(403, request=request)
+        self.model.failure = httpx.HTTPStatusError(
+            "private model access detail", request=request, response=http_response
+        )
+
+        with self.assertLogs("app.main", level="ERROR") as logs:
+            response = self.request(
+                "POST",
+                "/generate",
+                headers={"X-Correlation-ID": "test-model-access"},
+                json={
+                    "message": "hello",
+                    "model_name": "fake-model",
+                    "rule_decision": "provide_information",
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "LLM_UNAVAILABLE")
+        self.assertIn("model access", response.json()["error"]["message"])
+        self.assertIn("model_name=fake-model", logs.output[0])
+        self.assertIn("model_http_status=403", logs.output[0])
+        self.assertNotIn("secret", logs.output[0])
+        self.assertNotIn("secret", response.text)
+        self.assertNotIn("private model access detail", response.text)
 
     def test_undetermined_and_out_of_scope_requests_return_neutral_200_without_llm(self) -> None:
         cases = [
@@ -1468,6 +1676,31 @@ class APIWorkflowTests(unittest.TestCase):
         self.assertNotIn("Döntési javaslat", response.text)
         self.assertNotIn('"tone"', response.text)
 
+    def test_generation_rejects_markdown_headings_and_internal_instructions(self) -> None:
+        malformed_response = (
+            "### Döntés Természetesen\n\n"
+            "**Panasz Lényeges**: A döntés természetesen.\n\n"
+            "**Tér**: Magyarul válaszolj. A rendelkezésre álló díjadatok "
+            "kizárólag az OTP lakossági forint és deviza megtakarítási "
+            "számlákra vonatkoznak; kérdezz rá a számlatípusra."
+        )
+        self.model.response = malformed_response
+
+        response = self.request(
+            "POST",
+            "/generate",
+            json={
+                "message": "Panaszt teszek az átutalási díj miatt.",
+                "rule_decision": "BankTransferFeesGuidance",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotEqual(response.json()["response"], malformed_response)
+        self.assertNotIn("Döntés Természetesen", response.json()["response"])
+        self.assertNotIn("Magyarul válaszolj", response.json()["response"])
+        self.assertIn("Az előző válasz nem megfelelő", self.model.prompt)
+
     def test_generation_rejects_prompt_and_customer_message_echo(self) -> None:
         customer_message = (
             "Panaszt teszek az átutalási díj miatt. Az OTP forint megtakarítási "
@@ -1588,16 +1821,29 @@ class APIWorkflowTests(unittest.TestCase):
 
     def test_actual_generation_timeout_returns_504(self) -> None:
         self.model.failure = TimeoutError("internal timeout detail")
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory, "requests.jsonl")
+            with patch.dict(os.environ, {"REQUEST_LOG_FILE": str(log_file), "RETRIEVAL_ENABLED": "false"}):
+                self.app = create_app(
+                    state_builder=FakeStateBuilder(),
+                    generation_service=self.generation_service,
+                )
+            response = self.request(
+                "POST",
+                "/generate",
+                json={"message": "hello", "rule_decision": "provide_information"},
+            )
 
-        response = self.request(
-            "POST",
-            "/generate",
-            json={"message": "hello", "rule_decision": "provide_information"},
-        )
-
-        self.assertEqual(response.status_code, 504)
-        self.assertEqual(response.json()["error"]["code"], "GENERATION_TIMEOUT")
-        self.assertNotIn("internal timeout detail", response.text)
+            self.assertEqual(response.status_code, 504)
+            self.assertEqual(response.json()["error"]["code"], "GENERATION_TIMEOUT")
+            self.assertNotIn("internal timeout detail", response.text)
+            self.assertEqual(self.request("GET", "/health").status_code, 200)
+            records = [
+                json.loads(line)
+                for line in log_file.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(records[0]["status_code"], 504)
+            self.assertFalse(records[0]["cancelled"])
 
     def test_preprocessing_dependency_failure_returns_503(self) -> None:
         self.app = create_app(
@@ -1714,6 +1960,54 @@ class APIWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(records[0]["status_code"], 200)
             self.assertEqual(records[0]["correlation_id"], "request-log-test")
+            self.assertFalse(records[0]["cancelled"])
+
+    def test_cancelled_request_is_logged_without_fabricating_a_response(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory, "requests.jsonl")
+            with patch.dict(os.environ, {"REQUEST_LOG_FILE": str(log_file)}):
+                self.app = create_app(
+                    state_builder=FakeStateBuilder(),
+                    generation_service=self.generation_service,
+                )
+
+            async def cancel_request() -> None:
+                started = asyncio.Event()
+
+                @self.app.get("/slow-test")
+                async def slow_test() -> None:
+                    started.set()
+                    await asyncio.Event().wait()
+
+                transport = httpx.ASGITransport(app=self.app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    task = asyncio.create_task(
+                        client.get(
+                            "/slow-test",
+                            headers={"X-Correlation-ID": "cancelled-request"},
+                        )
+                    )
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await asyncio.wait_for(task, timeout=2)
+
+            with self.assertLogs("app.api.request_logging", level="WARNING") as logs:
+                asyncio.run(cancel_request())
+
+            self.assertIn("api_request_cancelled", logs.output[0])
+            self.assertIn("cancelled-request", logs.output[0])
+            records = [
+                json.loads(line)
+                for line in log_file.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertTrue(records[0]["cancelled"])
+            self.assertIsNone(records[0]["status_code"])
+            self.assertEqual(records[0]["correlation_id"], "cancelled-request")
 
     def test_models_response_is_structured(self) -> None:
         response = self.request("GET", "/models")
@@ -1735,7 +2029,8 @@ class APIWorkflowTests(unittest.TestCase):
                 PromptService(prompt_dir=prompt_directory)
 
     def test_default_app_initializes_generation_and_model_catalog(self) -> None:
-        self.app = create_app()
+        with patch.dict(os.environ, {"HF_TOKEN": "test-token"}):
+            self.app = create_app()
 
         self.assertIsNotNone(self.app.state.generation_service)
         response = self.request("GET", "/models")
@@ -1745,28 +2040,54 @@ class APIWorkflowTests(unittest.TestCase):
             any(model["is_default"] for model in response.json()["models"])
         )
 
+    @unittest.skip("Not supported in Inference API mode - only default model is available")
+    def test_selects_qwen_1_5b_for_generation(self) -> None:
+        self.app = create_app(
+            state_builder=FakeStateBuilder(),
+            retrieval_enabled=False,
+        )
+        with patch(
+            "app.models.llm_model.HuggingFaceChatModel.generate",
+            return_value="Kérjük, ellenőrizze a díjat.",
+        ):
+            response = self.request(
+                "POST",
+                "/generate",
+                json={
+                    "message": "Panasz az átutalási díj miatt.",
+                    "rule_decision": "provide_information",
+                    "model_name": "qwen2.5-1.5b-instruct",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["model_name"], "qwen2.5-1.5b-instruct")
+        self.assertEqual(response.json()["model_id"], "Qwen/Qwen2.5-1.5B-Instruct")
+        self.assertEqual(response.json()["response"], "Kérjük, ellenőrizze a díjat.")
+
     def test_invalid_model_configuration_fails_app_creation(self) -> None:
-        with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan"}):
+        with patch.dict(os.environ, {"QWEN2_5_TEMPERATURE": "nan", "HF_TOKEN": "test-token"}):
             with self.assertRaises(ValueError):
                 create_app()
 
     def test_environment_configures_default_model_and_generation_parameters(self) -> None:
         settings = {
-            "DEFAULT_LLM_MODEL": "qwen2-0.5b-instruct",
-            "QWEN2_MAX_NEW_TOKENS": "96",
-            "QWEN2_DO_SAMPLE": "true",
-            "QWEN2_TEMPERATURE": "0.65",
-            "QWEN2_TOP_P": "0.88",
+            "DEFAULT_LLM_MODEL": "qwen2.5-0.5b-instruct",
+            "QWEN2_5_MAX_NEW_TOKENS": "96",
+            "QWEN2_5_DO_SAMPLE": "true",
+            "QWEN2_5_TEMPERATURE": "0.65",
+            "QWEN2_5_TOP_P": "0.88",
+            "HF_TOKEN": "test-token",
         }
         with patch.dict(os.environ, settings):
             self.app = create_app()
 
         self.assertEqual(
             self.app.state.llm_service.default_model,
-            "qwen2-0.5b-instruct",
+            "qwen2.5-0.5b-instruct",
         )
         configuration = self.app.state.llm_service.model_configuration()
-        self.assertEqual(configuration.model_name, "qwen2-0.5b-instruct")
+        self.assertEqual(configuration.model_name, "qwen2.5-0.5b-instruct")
         self.assertEqual(
             configuration.model_parameters,
             {
@@ -1801,7 +2122,9 @@ class APIWorkflowTests(unittest.TestCase):
 
     def test_missing_prompt_directory_keeps_app_available(self) -> None:
         previous_prompt_dir = os.environ.get("PROMPT_DIR")
+        previous_hf_token = os.environ.get("HF_TOKEN")
         os.environ["PROMPT_DIR"] = str(Path(_PROMPT_DIRECTORY.name, "missing"))
+        os.environ["HF_TOKEN"] = "test-token"
         try:
             self.app = create_app()
             health_response = self.request("GET", "/health")
@@ -1815,6 +2138,10 @@ class APIWorkflowTests(unittest.TestCase):
                 os.environ.pop("PROMPT_DIR", None)
             else:
                 os.environ["PROMPT_DIR"] = previous_prompt_dir
+            if previous_hf_token is None:
+                os.environ.pop("HF_TOKEN", None)
+            else:
+                os.environ["HF_TOKEN"] = previous_hf_token
 
         self.assertEqual(health_response.status_code, 200)
         self.assertEqual(generation_response.status_code, 503)
