@@ -19,6 +19,7 @@ from app.services.llm_service import (
 )
 
 router = APIRouter()
+models_router = APIRouter()
 _ERROR_RESPONSES = {
     status_code: {"model": APIErrorResponse, "description": description}
     for status_code, description in {
@@ -32,7 +33,7 @@ _ERROR_RESPONSES = {
 }
 
 
-@router.get(
+@models_router.get(
     "/models",
     response_model=AvailableModelsResponse,
     responses={

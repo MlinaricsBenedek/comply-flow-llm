@@ -1,5 +1,28 @@
 # Szoftverkövetelmény-specifikáció (SRS)
 
+## Aktuális alapértelmezett mód
+
+Az `APP_MODE=simple` módban a `POST /generate` a kötelező `rule_decision` és
+`rule_reason` mezőket, valamint az opcionális `matched_rules` listát használja;
+a korábbi kérésformátum `input_data` objektumából is kiolvassa e mezőket.
+Modell és modellparaméterek opcionálisan választhatók; az alapértelmezett modell
+a `Qwen/Qwen2.5-1.5B-Instruct`. A többi elfogadott korábbi kérésmezőt nem
+használja. A `prompts/prompt.txt` és e három mező alapján
+egyetlen LLM-hívás készíti el a válasz középső részét, a szerver pedig fix
+megszólítást és elérhetőséget illeszt hozzá. Üres modellválasz hiba. Az önálló
+`POST /preprocessing` továbbra is elérhető, de a generálás nem hívja meg, és nem
+használja fel automatikusan az eredményét. Nem fut dokumentumfeldolgozás,
+visszakeresés, kérésadat-fájlnaplózás vagy induláskori bemelegítés. A modellek
+helyi gyorsítótára és a metaadatokat tartalmazó működési napló ettől független.
+A természetes nyelvű kimenet tartalmi helyességét a rendszer nem garantálja.
+A `do_sample` minden üzemmódban `false`, a kérésben vagy környezetben megadott
+`true` érték figyelmeztetés mellett nem érvényesül. A `temperature` és `top_p`
+nem kerül a modellhívásba.
+
+Az alábbi rész a megőrzött, `APP_MODE=legacy` beállítással bekapcsolható régi
+működést dokumentálja; az ottani alapértékek csak e módra vonatkoznak, kivéve
+a mintavételezést, amely legacy módban is mindig kikapcsolt.
+
 **Projekt:** Comply Flow AI Service  
 **A dokumentum célja:** a repositoryban megvalósított szolgáltatás és üzleti logika dokumentálása
 **Állapot:** implementációalapú leírás; nem jövőbeli célállapot vagy jogi megfelelőségi ígéret

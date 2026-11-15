@@ -1,5 +1,61 @@
 # Az alkalmazás működése
 
+## Alapértelmezett működés
+
+Alapértelmezésben (`APP_MODE=simple`) a `POST /generate` a
+`rule_decision`, `rule_reason` és `matched_rules` mezőket használja, az utóbbit
+szövegek listájaként. A döntés és indok kötelező és nem lehet üres; a lista
+elhagyható vagy üres lehet.
+Példa: `{"rule_decision":"elfogadva","rule_reason":"a feltétel teljesült","matched_rules":["3.2. pont"]}`.
+Opcionális a `model_name` és a `model_parameters`. A korábbi kérésmezők
+(`input_data`, `message`, `facts`, `category`, `bank`, retrieval-beállítások,
+`prompt_name`, `reference_answer`) továbbra is elfogadottak, de a generálás nem
+használja fel őket; a prompt mindig `prompt`. Az `input_data` objektumból a
+`decision`/`ruleDecision`/`rule_decision`, `reason`/`ruleReason`/`rule_reason`
+és `matchedRules`/`matched_rules` mezők, illetve a `rule_result` vagy
+`ruleResult` objektum ugyanilyen mezői is elfogadottak. A felső szintű mező
+elsőbbséget élvez, utána az `input_data`, majd a beágyazott szabályeredmény.
+Ismeretlen felső szintű mező továbbra is validációs hibát ad.
+Az ASP.NET / szabálymotor adja meg a felső szintű, ügyfél számára érthető
+magyar döntést és indokot, valamint az alkalmazott szabályok hivatkozásait.
+A Python nem fordítja le a technikai döntéskódot és nem állapítja meg önállóan,
+hogy a panasz megalapozott-e. A küldött szövegnek a tényleges szabályeredményt
+kell tükröznie.
+A `do_sample` minden üzemmódban ténylegesen `false`, akkor is, ha a kérés
+vagy környezeti változó `true` értéket ad meg. Ilyenkor a rendszer figyelmeztetést
+naplóz. A `temperature` és `top_p` mintavételezés nélkül nem kerül a modellhez;
+a válasz `model_parameters` mezője a ténylegesen használt értékeket mutatja.
+A `GET /models` mindkét üzemmódban kilistázza a választható modellneveket;
+egyszerű módban alapértelmezés szerint ez a `qwen2.5-1.5b-instruct`
+(`Qwen/Qwen2.5-1.5B-Instruct`). A modell neve és azonosítója továbbra is
+beállítható a `DEFAULT_LLM_MODEL`, illetve a `QWEN2_5_MODEL_NAME` változóval.
+
+A `prompts/prompt.txt` szabja meg a feladatot; a három mező külön, JSON-ként
+kódolva kerül a promptba. A modell egyszer készíti el a levél középső részét, amelyet a szerver
+fix megszólítással, bevezetővel és az `example@gmail.com` elérhetőséggel egészít
+ki. Üres modellválasz vagy modellhiba esetén a végpont hibát ad, nem helyettesítő
+választ. A `sources` üres. A modell természetes nyelvű kimenetének tényszerűsége
+és a szabályhivatkozások teljes megjelenése nem garantálható pusztán a prompttal.
+
+Az önálló `POST /preprocessing` végpont változatlanul elérhető: a `message`
+szöveget tisztítja, anonimizálja, tényeket nyer ki és kategorizálja. Az eredmény
+a klienshez kerül; az egyszerű `/generate` végpont nem futtatja automatikusan
+az előfeldolgozást, és csak a megadott három szabálymezőt használja.
+
+Ebben a módban nincs dokumentumbetöltés, embedding, retrieval,
+kérésadat-fájlnaplózás vagy induláskori modellbemelegítés. A modell súlyai a
+szokásos Hugging Face gyorsítótárba kerülhetnek; a kérésadatok nem kerülnek
+alkalmazásoldali tárolóba.
+Az API működési naplója továbbra is rögzíthet kérésmetaadatokat és hibakódokat.
+
+## Korábbi működés (csak `APP_MODE=legacy`)
+
+Az alábbi történeti leírás kizárólag a régi, `APP_MODE=legacy` beállítással
+visszakapcsolható működésre vonatkozik. A benne szereplő „alapértelmezett”
+megjelölések a legacy módon belüli beállításokat jelentik. Legacy módban a
+kérés törzse fájlba is naplózódik. A mintavételezésre vonatkozó korábbi
+beállítások helyett itt is a fenti, mindig kikapcsolt működés érvényes.
+
 ## Áttekintés
 
 A Comply Flow AI Service egy FastAPI-alapú backend ügyfélüzenetek előfeldolgozására és nyelvi modellel történő válaszgenerálására. A kliensek HTTP API-n keresztül érik el; az alkalmazás nem tartalmaz felhasználói felületet vagy adatbázist.
@@ -232,7 +288,7 @@ Az egyetlen regisztrált modell az alapértelmezett `qwen2.5-0.5b-instruct`. A H
 
 A `GET /models` az egyetlen regisztrált Qwen modellt sorolja fel; a letöltött fájlok meglétét nem ellenőrzi. A `model_name` elhagyása az alapértelmezett modellt választja; a szerver nem helyettesíti automatikusan a kifejezetten kért modellt. A nyilvános modell letöltéséhez nem kell Hugging Face token, de a letöltési hiba vagy a helyi erőforrások hiánya `503 LLM_UNAVAILABLE` hibát okozhat.
 
-A generálási beállítások alapértékei: `LLM_MAX_NEW_TOKENS` (`512`), `LLM_DO_SAMPLE` (`false`), `LLM_TEMPERATURE` (`1.0`) és `LLM_TOP_P` (`1.0`). Ezek a `QWEN2_5_*` változókkal írhatók felül; a változónév végződése `MAX_NEW_TOKENS`, `DO_SAMPLE`, `TEMPERATURE` vagy `TOP_P`. A zero-shot classifier modellazonosítója a `ZERO_SHOT_CLASSIFIER_MODEL` változóval cserélhető, alapértéke `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. A kérés opcionális `model_parameters` objektuma egy-egy generálásra írhatja felül az LLM beállításait. A pozitív `max_new_tokens`, pozitív és véges `temperature`, valamint a `(0, 1]` tartományú `top_p` kötelező. A `temperature` és `top_p` csak akkor kerül ténylegesen a modellhívásba, ha a mintavételezés engedélyezett; a sikeres válasz csak a ténylegesen alkalmazott paramétereket tartalmazza.
+A generálási beállítások alapértékei: `LLM_MAX_NEW_TOKENS` (`512`), `LLM_DO_SAMPLE` (`false`), `LLM_TEMPERATURE` (`1.0`) és `LLM_TOP_P` (`1.0`). Ezek a `QWEN2_5_*` változókkal írhatók felül; a változónév végződése `MAX_NEW_TOKENS`, `DO_SAMPLE`, `TEMPERATURE` vagy `TOP_P`. A zero-shot classifier modellazonosítója a `ZERO_SHOT_CLASSIFIER_MODEL` változóval cserélhető, alapértéke `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`. A kérés opcionális `model_parameters` objektuma egy-egy generálásra írhatja felül az LLM beállításait. A pozitív `max_new_tokens`, pozitív és véges `temperature`, valamint a `(0, 1]` tartományú `top_p` kötelező. A mintavételezés mindig kikapcsolt; a `temperature` és `top_p` ezért nem kerül a modellhívásba. A sikeres válasz csak a ténylegesen alkalmazott paramétereket tartalmazza.
 
 A HTTP-kérések alkalmazásszintű timeoutja 600 másodperc. A Transformers modellbetöltése és inferenciája helyi, szinkron művelet; az alkalmazás timeoutja nem szakítja meg megbízhatóan a CPU/GPU-n futó inference-t. A függőség tényleges `TimeoutError` kivétele külön is `504` választ eredményezhet, és egy külső gateway ennél rövidebb timeoutot is alkalmazhat, miközben a szerver még dolgozik. Az API `504` válasza nem állítja le a szervert; szerverleállításkor vagy más feladatmegszakításkor az ASGI-kérés `CancelledError`-t kaphat, amelyet az alkalmazás nem alakít át hamis `500` válasszá. A naplóban `api_request_cancelled` jelenik meg, a JSONL-ben pedig `cancelled: true`, a már elküldött státusz hiányában `status_code: null` és a rendelkezésre álló korrelációs azonosító. A megszakítás továbbterjed az ASGI-szerverhez, amely leállításkor továbbra is kiírhat tracebacket; ez nem állítja le a már futó szinkron modellműveletet. Szabályos leállításhoz a futó kéréseket hagyni kell befejeződni; az ismételt megszakító jelzés ezt meghiúsíthatja. A modellletöltéshez és futtatáshoz megfelelő hálózati hozzáférés és számítási erőforrás szükséges lehet.
 

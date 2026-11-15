@@ -86,6 +86,9 @@ class FakeStateBuilder:
 
 class APIWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
+        mode_patch = patch.dict(os.environ, {"APP_MODE": "legacy"})
+        mode_patch.start()
+        self.addCleanup(mode_patch.stop)
         self.model = FakeModel()
         self.generation_service = GenerationService(
             prompt_service=FakePromptService(),
@@ -499,9 +502,7 @@ class APIWorkflowTests(unittest.TestCase):
             response.json()["model_parameters"],
             {
                 "max_new_tokens": 48,
-                "do_sample": True,
-                "temperature": 0.7,
-                "top_p": 0.9,
+                "do_sample": False,
             },
         )
         self.assertIsNone(self.model.prompt)
@@ -510,9 +511,7 @@ class APIWorkflowTests(unittest.TestCase):
             alternate_model.parameters,
             {
                 "max_new_tokens": 48,
-                "do_sample": True,
-                "temperature": 0.7,
-                "top_p": 0.9,
+                "do_sample": False,
             },
         )
 
@@ -2072,9 +2071,7 @@ class APIWorkflowTests(unittest.TestCase):
             configuration.model_parameters,
             {
                 "max_new_tokens": 96,
-                "do_sample": True,
-                "temperature": 0.65,
-                "top_p": 0.88,
+                "do_sample": False,
             },
         )
 

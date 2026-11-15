@@ -1,8 +1,12 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 import math
 import re
 from typing import Protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 class LanguageModel(Protocol):
@@ -120,15 +124,15 @@ class LLMService:
         ):
             raise InvalidModelParameters("top_p must be greater than zero and at most one.")
 
+        if do_sample:
+            logger.warning(
+                "llm_sampling_disabled",
+                extra={"model_name": selected_model_name},
+            )
         effective_parameters: dict[str, int | float | bool] = {
             "max_new_tokens": max_new_tokens,
-            "do_sample": do_sample,
+            "do_sample": False,
         }
-        if do_sample:
-            effective_parameters.update(
-                temperature=float(temperature),
-                top_p=float(top_p),
-            )
 
         configured_model_id = getattr(model, "model_name", selected_model_name)
         model_id = (

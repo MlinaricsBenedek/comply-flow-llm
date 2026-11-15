@@ -15,9 +15,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.errors import APIError
 from app.api.request_logging import RequestFileLoggingMiddleware
 from app.Preprocessing.state_builder import StateBuilder
+from app.api.routes.generation import models_router
 from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
 from app.api.routes.preprocessing import router as preprocessing_router
+from app.api.routes.simple_generation import router as simple_generation_router
 from app.models.llm_model import QwenModel
 from app.Preprocessing.anonymizer import MessageAnonymizer
 from app.Preprocessing.classifier import MessageClassifier
@@ -28,6 +30,7 @@ from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
+from app.services.simple_generation_service import SimpleGenerationService
 from app.services.reference_document_loader import ReferenceDocumentLoader
 from app.services.retriever import Retriever
 from app.services.vector_store import ChromaVectorStore
@@ -160,13 +163,22 @@ def _create_default_state_builder() -> StateBuilder:
 
 def create_app(
     state_builder: StateBuilder | None = None,
-    generation_service: GenerationService | None = None,
+    generation_service: GenerationService | SimpleGenerationService | None = None,
     reference_documents_dir: str | Path | None = None,
     retriever: Retriever | None = None,
     retrieval_enabled: bool | None = None,
+    mode: str | None = None,
 ) -> FastAPI:
+    mode = mode if mode is not None else os.getenv("APP_MODE", "simple")
+    if mode not in {"simple", "legacy"}:
+        raise ValueError("APP_MODE must be 'simple' or 'legacy'.")
+    legacy_mode = mode == "legacy"
     if state_builder is None:
         state_builder = _create_default_state_builder()
+    if not legacy_mode:
+        reference_documents_dir = None
+        retriever = None
+        retrieval_enabled = False
 
     configured_documents_dir = reference_documents_dir
     if isinstance(configured_documents_dir, str) and not configured_documents_dir.strip():
@@ -219,12 +231,20 @@ def create_app(
         
         qwen2_5_params = _model_generation_parameters("QWEN2_5", generation_parameters)
 
-        default_model_name = os.getenv("DEFAULT_LLM_MODEL", "qwen2.5-0.5b-instruct")
+        default_model_name = os.getenv(
+            "DEFAULT_LLM_MODEL",
+            "qwen2.5-0.5b-instruct" if legacy_mode else "qwen2.5-1.5b-instruct",
+        )
         models = {
             default_model_name: QwenModel(
                 model_name=os.getenv(
                     "QWEN2_5_MODEL_NAME",
-                    os.getenv("QWEN_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct"),
+                    os.getenv(
+                        "QWEN_MODEL_NAME",
+                        "Qwen/Qwen2.5-0.5B-Instruct"
+                        if legacy_mode
+                        else "Qwen/Qwen2.5-1.5B-Instruct",
+                    ),
                 ),
                 **qwen2_5_params,
             )
@@ -236,9 +256,11 @@ def create_app(
             default_model=default_model,
         )
 
-        default_prompt = os.getenv("DEFAULT_PROMPT_NAME", "v1.1")
+        default_prompt = os.getenv("DEFAULT_PROMPT_NAME", "v1.1") if legacy_mode else "prompt"
         try:
-            prompt_service = PromptService()
+            prompt_service = PromptService(
+                prompt_names=None if legacy_mode else {default_prompt}
+            )
             prompt_service.get_prompt(default_prompt)
         except (OSError, UnicodeError, KeyError, ValueError) as error:
             logger.error(
@@ -250,16 +272,26 @@ def create_app(
             )
             generation_service = None
         else:
-            generation_service = GenerationService(
-                prompt_service=prompt_service,
-                llm_service=llm_service,
-                default_prompt=default_prompt,
-            )
+            if legacy_mode:
+                generation_service = GenerationService(
+                    prompt_service=prompt_service,
+                    llm_service=llm_service,
+                    default_prompt=default_prompt,
+                )
+            else:
+                generation_service = SimpleGenerationService(
+                    prompt_service=prompt_service,
+                    llm_service=llm_service,
+                )
     else:
         llm_service = getattr(generation_service, "llm_service", None)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if not legacy_mode:
+            yield
+            return
+
         # Startup: Preload all models to avoid lazy-load timeout on first request
         logger.info("model_warmup_starting")
         warmup_start = __import__("time").perf_counter()
@@ -397,16 +429,17 @@ def create_app(
         )
         return response
 
-    request_log_file = os.getenv("REQUEST_LOG_FILE", "logs/requests.jsonl").strip()
-    if not request_log_file:
-        raise ValueError("REQUEST_LOG_FILE must not be empty.")
-    request_log_path = Path(request_log_file)
-    if not request_log_path.is_absolute():
-        request_log_path = Path(__file__).resolve().parents[1] / request_log_path
-    application.add_middleware(
-        RequestFileLoggingMiddleware,
-        log_file=request_log_path,
-    )
+    if legacy_mode:
+        request_log_file = os.getenv("REQUEST_LOG_FILE", "logs/requests.jsonl").strip()
+        if not request_log_file:
+            raise ValueError("REQUEST_LOG_FILE must not be empty.")
+        request_log_path = Path(request_log_file)
+        if not request_log_path.is_absolute():
+            request_log_path = Path(__file__).resolve().parents[1] / request_log_path
+        application.add_middleware(
+            RequestFileLoggingMiddleware,
+            log_file=request_log_path,
+        )
 
     @application.exception_handler(APIError)
     async def handle_api_error(request: Request, error: APIError):
@@ -465,7 +498,8 @@ def create_app(
     application.state.vector_stores = vector_stores
     application.state.vector_store = vector_stores.get("OTP")
 
-    application.include_router(generation_router)
+    application.include_router(generation_router if legacy_mode else simple_generation_router)
+    application.include_router(models_router)
     application.include_router(health_router)
     application.include_router(preprocessing_router)
 

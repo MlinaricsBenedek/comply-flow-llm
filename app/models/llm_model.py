@@ -1,5 +1,9 @@
+import logging
 from threading import Lock
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 class HuggingFaceChatModel:
@@ -37,8 +41,8 @@ class HuggingFaceChatModel:
 
 		max_new_tokens = generation_parameters.get("max_new_tokens", self.max_new_tokens)
 		do_sample = generation_parameters.get("do_sample", self.do_sample)
-		temperature = generation_parameters.get("temperature", self.temperature)
-		top_p = generation_parameters.get("top_p", self.top_p)
+		if do_sample:
+			logger.warning("llm_sampling_disabled", extra={"model_name": self.model_name})
 
 		import torch
 
@@ -59,14 +63,9 @@ class HuggingFaceChatModel:
 		with torch.inference_mode():
 			generation_options = {
 				"max_new_tokens": max_new_tokens,
-				"do_sample": do_sample,
+				"do_sample": False,
 				"pad_token_id": pad_token_id,
 			}
-			if do_sample:
-				generation_options.update(
-					temperature=temperature,
-					top_p=top_p,
-				)
 
 			generated_tokens = model.generate(
 				**model_inputs,

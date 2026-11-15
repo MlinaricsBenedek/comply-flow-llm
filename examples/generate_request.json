@@ -1,28 +1,7 @@
 {
-  "input_data": {
-    "case_state": {
-      "category": "DELIVERY"
-    },
-    "decision": "not_evaluated",
-    "reason": "A példa nem futtat szabálymotort.",
-    "rule_result": {
-      "decision": "not_evaluated"
-    },
-    "bank": "otp"
-  },
-  "message": "Hol tart a rendelésem? A rendelési számom: TESZT-123.",
-  "facts": {
-    "order_id": ["TESZT-123"],
-    "delivery_status": ["A csomagot 2026-10-24-én átadták a futárnak."]
-  },
-  "category": "DELIVERY",
-  "bank": "OTP",
-  "prompt_name": "v1.1",
-  "model_name": "qwen2.5-0.5b-instruct",
-  "model_parameters": {
-    "max_new_tokens": 180,
-    "do_sample": false,
-    "temperature": 0.7,
-    "top_p": 0.9
-  }
+  "rule_decision": "A panasz megalapozott",
+  "rule_reason": "A díj nem felelt meg a szerződésben szereplő feltételeknek.",
+  "matched_rules": [
+    "Szerződés 3.2. pont"
+  ]
 }

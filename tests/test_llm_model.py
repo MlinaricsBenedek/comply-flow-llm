@@ -95,18 +95,25 @@ class LLMModelTests(unittest.TestCase):
             [1, 2, 3],
         )
 
-    def test_model_applies_sampling_parameters_when_sampling_is_enabled(self) -> None:
-        self.generate(
-            max_new_tokens=32,
-            do_sample=True,
-            temperature=0.65,
-            top_p=0.9,
-        )
+    def test_model_disables_requested_sampling(self) -> None:
+        with self.assertLogs("app.models.llm_model", level="WARNING") as logs:
+            self.generate(
+                max_new_tokens=32,
+                do_sample=True,
+                temperature=0.65,
+                top_p=0.9,
+            )
 
         self.assertEqual(self.model.generation_options["max_new_tokens"], 32)
-        self.assertTrue(self.model.generation_options["do_sample"])
-        self.assertEqual(self.model.generation_options["temperature"], 0.65)
-        self.assertEqual(self.model.generation_options["top_p"], 0.9)
+        self.assertFalse(self.model.generation_options["do_sample"])
+        self.assertNotIn("temperature", self.model.generation_options)
+        self.assertNotIn("top_p", self.model.generation_options)
+        self.assertIn("llm_sampling_disabled", logs.output[0])
+
+    def test_model_disables_sampling_from_model_defaults(self) -> None:
+        self.adapter.do_sample = True
+        self.generate()
+        self.assertFalse(self.model.generation_options["do_sample"])
 
     def test_model_omits_sampling_parameters_when_sampling_is_disabled(self) -> None:
         self.generate(

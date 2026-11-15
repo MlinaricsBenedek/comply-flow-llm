@@ -6,9 +6,14 @@ DEFAULT_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
 class PromptService:
-    def __init__(self, prompt_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        prompt_dir: str | Path | None = None,
+        prompt_names: set[str] | None = None,
+    ) -> None:
         configured_dir = prompt_dir or os.getenv("PROMPT_DIR") or DEFAULT_PROMPT_DIR
         self.prompt_dir = Path(configured_dir)
+        self.prompt_names = prompt_names
         self._prompts: dict[str, str] = {}
         self.reload()
 
@@ -19,7 +24,9 @@ class PromptService:
         prompts = {
             prompt_file.stem: prompt_file.read_text(encoding="utf-8-sig")
             for prompt_file in sorted(self.prompt_dir.iterdir())
-            if prompt_file.is_file() and prompt_file.suffix.lower() == ".txt"
+            if prompt_file.is_file()
+            and prompt_file.suffix.lower() == ".txt"
+            and (self.prompt_names is None or prompt_file.stem in self.prompt_names)
         }
         if not prompts:
             raise FileNotFoundError(
