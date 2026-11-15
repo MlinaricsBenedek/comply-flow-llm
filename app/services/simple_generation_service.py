@@ -19,7 +19,7 @@ class SimpleGenerationService:
         model_name: str | None = None,
         model_parameters: dict[str, int | float | bool] | None = None,
     ) -> GenerationResult:
-        template = self.prompt_service.get_prompt("prompt")
+        template = self.prompt_service.get_prompt("prompt").rstrip()
         values = {
             "rule_decision": rule_decision,
             "rule_reason": rule_reason,
