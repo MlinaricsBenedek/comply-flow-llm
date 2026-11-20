@@ -4,6 +4,8 @@ import re
 from threading import Lock
 from typing import Any
 
+from app.config import hugging_face_token_options
+
 
 class MessageClassifier:
 	MODEL_NAME = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
@@ -188,13 +190,16 @@ class MessageClassifier:
 			with self._load_lock:
 				if self._classifier is None:
 					pipeline_factory = self._pipeline_factory
+					token_options: dict[str, str] = {}
 					if pipeline_factory is None:
 						from transformers import pipeline
 
 						pipeline_factory = pipeline
+						token_options = hugging_face_token_options()
 					self._classifier = pipeline_factory(
 						task="zero-shot-classification",
 						model=self.model_name,
+						**token_options,
 					)
 
 		return self._classifier

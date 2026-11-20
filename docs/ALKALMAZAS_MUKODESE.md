@@ -30,6 +30,13 @@ egyszerű módban alapértelmezés szerint ez a `qwen2.5-1.5b-instruct`
 (`Qwen/Qwen2.5-1.5B-Instruct`). A modell neve és azonosítója továbbra is
 beállítható a `DEFAULT_LLM_MODEL`, illetve a `QWEN2_5_MODEL_NAME` változóval.
 
+A Hugging Face-token opcionálisan a `HF_TOKEN` környezeti változóban, vagy a
+projekt gyökerében lévő `.env` fájl `HF_TOKEN` mezőjében adható meg. A
+környezeti változó elsőbbséget élvez. A token a modell- és tokenizálóbetöltésekhez,
+valamint az embedding- és előfeldolgozó modellekhez is továbbításra kerül;
+nyilvános, hozzáférhető modellekhez nem kötelező. A `.env` fájlt ne oszd meg,
+és ne kövesd Gitben.
+
 A `prompts/prompt.txt` szabja meg a feladatot; a három mező külön, JSON-ként
 kódolva kerül a promptba. A modell egyszer készíti el a levél középső részét, amelyet a szerver
 fix megszólítással, bevezetővel és az `example@gmail.com` elérhetőséggel egészít
@@ -42,11 +49,54 @@ szöveget tisztítja, anonimizálja, tényeket nyer ki és kategorizálja. Az er
 a klienshez kerül; az egyszerű `/generate` végpont nem futtatja automatikusan
 az előfeldolgozást, és csak a megadott három szabálymezőt használja.
 
-Ebben a módban nincs dokumentumbetöltés, embedding, retrieval,
-kérésadat-fájlnaplózás vagy induláskori modellbemelegítés. A modell súlyai a
-szokásos Hugging Face gyorsítótárba kerülhetnek; a kérésadatok nem kerülnek
-alkalmazásoldali tárolóba.
+Az egyszerű `/generate` esetén nincs dokumentumbetöltés, embedding vagy
+retrieval; egyszerű módban nincs kérésadat-fájlnaplózás vagy induláskori
+modellbemelegítés. A modell súlyai a
+szokásos Hugging Face gyorsítótárba kerülhetnek; az egyszerű `/generate`
+kérésadatai nem kerülnek alkalmazásoldali tárolóba.
 Az API működési naplója továbbra is rögzíthet kérésmetaadatokat és hibakódokat.
+
+## Önálló RAG-alapú értékelés
+
+A `POST /generate-rag` mindkét üzemmódban külön végpont, nem módosítja a
+`/generate` működését. Kötelező a nem üres `message`; opcionális a `bank`
+(`OTP` vagy `Raiffeisen`, alapértelmezés `OTP`, kis- és nagybetűtől független),
+`facts`, `category`, `retrieval_top_k`, `retrieval_min_similarity`, `model_name`
+és `model_parameters`. Példa:
+
+```json
+{"message":"Miért vontak le átutalási díjat?","bank":"OTP","retrieval_top_k":5}
+```
+
+A végpont a kiválasztott bank indexében keres, és a találatok szövegét az
+üzenettel és az esetleges tényekkel együtt az LLM-nek adja értékelésre.
+Nem igényel és nem fogad szabálymotor-döntést, és nem futtat automatikus
+előfeldolgozást vagy anonimizálást: szükség esetén a kliens előbb hívja a
+`/preprocessing` végpontot, és annak eredményét adja át. A válasz
+`response`, `sources`, modelladatok és `prompt_version: "rag"` mezőket
+tartalmaz. A források és az LLM kimenete nem garantálja az értékelés
+ténybeli helyességét; a következtetés ellenőrzést igényelhet.
+
+Előzetesen indexelni kell a bank dokumentumait:
+`python -m app.services.index_documents --bank OTP` vagy
+`python -m app.services.index_documents --bank Raiffeisen`.
+A `VECTOR_STORE_DIR`, `EMBEDDING_MODEL_NAME`, `RETRIEVAL_TOP_K` és
+`RETRIEVAL_MIN_SIMILARITY` beállításokat ez a végpont is használja; az
+embedding modellnek az indexeléskor használttal egyeznie kell.
+A `RETRIEVAL_ENABLED` kapcsoló az új végpontra nem vonatkozik. A keresés
+és az embedding modell csak az új végpont hívásakor indul. Ha nincs megfelelő
+találat, a végpont `404 RETRIEVAL_NO_SOURCES` hibát ad LLM-hívás nélkül;
+retrieval- vagy modellhiba esetén nem ad helyettesítő sikeres választ.
+Az Uvicorn terminálnaplója jelzi a keresés és a modellhívás indulását, valamint
+sikeres befejezésük időtartamát és a kérés korrelációs azonosítóját. Ez nem
+mutatja a generálás közbeni előrehaladást; az első modellhívás idejébe a modell
+betöltése is beleszámít.
+A sikeres `/generate-rag` válasz szövege a repository
+`logs/rag_responses.jsonl` fájljába is bekerül, időponttal és korrelációs
+azonosítóval, soronként egy JSON-objektumként. A fájl érzékeny adatokat is
+tartalmazhat; csak megfelelően védett helyen, a szükséges ideig tárold. A fájl
+Git által figyelmen kívül hagyott könyvtárban van. Írási hiba a terminálnaplóban
+megjelenik, de az API válaszát nem változtatja meg.
 
 ## Korábbi működés (csak `APP_MODE=legacy`)
 

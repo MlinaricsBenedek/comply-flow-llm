@@ -3,6 +3,8 @@ from collections.abc import Callable, Sequence
 from threading import Lock
 from typing import Any
 
+from app.config import hugging_face_token_options
+
 
 DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
@@ -108,8 +110,9 @@ class EmbeddingService:
                     if self._model_loader is None:
                         from transformers import AutoModel, AutoTokenizer
 
-                        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-                        model = AutoModel.from_pretrained(self.model_name)
+                        token_options = hugging_face_token_options()
+                        tokenizer = AutoTokenizer.from_pretrained(self.model_name, **token_options)
+                        model = AutoModel.from_pretrained(self.model_name, **token_options)
                     else:
                         tokenizer, model = self._model_loader(self.model_name)
 

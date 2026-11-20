@@ -19,6 +19,7 @@ from app.api.routes.generation import models_router
 from app.api.routes.generation import router as generation_router
 from app.api.routes.health import router as health_router
 from app.api.routes.preprocessing import router as preprocessing_router
+from app.api.routes.rag_generation import router as rag_generation_router
 from app.api.routes.simple_generation import router as simple_generation_router
 from app.models.llm_model import QwenModel
 from app.Preprocessing.anonymizer import MessageAnonymizer
@@ -30,6 +31,7 @@ from app.services.embedding_service import EmbeddingService
 from app.services.generation_service import GenerationService
 from app.services.llm_service import LLMService
 from app.services.prompt_service import PromptService
+from app.services.rag_generation_service import RagGenerationService
 from app.services.simple_generation_service import SimpleGenerationService
 from app.services.reference_document_loader import ReferenceDocumentLoader
 from app.services.retriever import Retriever
@@ -490,6 +492,7 @@ def create_app(
 
     application.state.state_builder = state_builder
     application.state.generation_service = generation_service
+    application.state.rag_generation_service = RagGenerationService()
     application.state.llm_service = llm_service
     application.state.reference_documents = reference_documents
     application.state.reference_document_chunks = reference_document_chunks
@@ -499,6 +502,7 @@ def create_app(
     application.state.vector_store = vector_stores.get("OTP")
 
     application.include_router(generation_router if legacy_mode else simple_generation_router)
+    application.include_router(rag_generation_router)
     application.include_router(models_router)
     application.include_router(health_router)
     application.include_router(preprocessing_router)

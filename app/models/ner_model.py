@@ -2,6 +2,8 @@ from collections.abc import Callable
 from threading import Lock
 from typing import Any
 
+from app.config import hugging_face_token_options
+
 
 class NERModel:
     MODEL_NAME = "NYTK/named-entity-recognition-nerkor-hubert-hungarian"
@@ -21,14 +23,17 @@ class NERModel:
             with self._load_lock:
                 if self._ner is None:
                     pipeline_factory = self._pipeline_factory
+                    token_options: dict[str, str] = {}
                     if pipeline_factory is None:
                         from transformers import pipeline
 
                         pipeline_factory = pipeline
+                        token_options = hugging_face_token_options()
                     self._ner = pipeline_factory(
                         task="ner",
                         model=self.model_name,
                         aggregation_strategy="simple",
+                        **token_options,
                     )
 
         return self._ner(text)

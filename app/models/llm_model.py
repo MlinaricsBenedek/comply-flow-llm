@@ -2,6 +2,8 @@ import logging
 from threading import Lock
 from typing import Any
 
+from app.config import hugging_face_token_options
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +87,13 @@ class HuggingFaceChatModel:
 				if self._model is None:
 					from transformers import AutoModelForCausalLM, AutoTokenizer
 
-					tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+					token_options = hugging_face_token_options()
+					tokenizer = AutoTokenizer.from_pretrained(self.model_name, **token_options)
 					model = AutoModelForCausalLM.from_pretrained(
 						self.model_name,
 						torch_dtype="auto",
 						device_map="auto",
+						**token_options,
 					)
 					model.eval()
 					self._tokenizer = tokenizer
